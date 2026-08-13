@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEMM Lab · 矩阵乘法分层 Tile 可视化</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Crect x='7' y='7' width='8' height='8' fill='%2358a6ff'/%3E%3Crect x='17' y='7' width='8' height='8' fill='%233fb950'/%3E%3Crect x='7' y='17' width='8' height='8' fill='%2358a6ff' opacity='.5'/%3E%3Crect x='17' y='17' width='8' height='8' fill='%23f0883e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>GEMM <span>Lab</span></h1>
+    <p>矩阵乘法多层 Tile 可视化 · 数据搬运 · 微内核</p>
+  </div>
+
+  <div class="presets" id="presetBar" title="预设配置"></div>
+
+  <div class="transport">
+    <button id="btnPlay" class="primary" title="播放 / 暂停 (空格)">▶</button>
+    <button id="btnReset" title="重置回起点">⏮</button>
+    <button id="btnEnd" title="运行到结束">⏭</button>
+    <button id="btnStep" title="按选定粒度单步">单步</button>
+    <select id="selStep" title="单步粒度">
+      <option value="event">微步(1事件)</option>
+      <option value="k" selected>k 步(1个k)</option>
+      <option value="block">块步(1个微块)</option>
+      <option value="tile">面板步(1个k面板)</option>
+    </select>
+    <label class="speed"><span>速度</span>
+      <input type="range" id="rngSpeed" min="0.25" max="20" step="0.25" value="1">
+      <b id="lblSpeed">1.0×</b>
+    </label>
+    <button id="btnConfig">⚙ 参数</button>
+  </div>
+
+  <div class="progress">
+    <div id="progressFill"></div>
+    <span id="progressText">就绪 — 按 ▶ 开始</span>
+  </div>
+</header>
+
+<div id="configPanel" class="hidden">
+  <div class="cfg-grid">
+    <label>M <input id="inM" type="number" min="1" max="256" step="1"></label>
+    <label>N <input id="inN" type="number" min="1" max="256" step="1"></label>
+    <label>K <input id="inK" type="number" min="1" max="256" step="1"></label>
+    <label class="sep">mc <input id="inMc" type="number" min="1" step="1"></label>
+    <label>nc <input id="inNc" type="number" min="1" step="1"></label>
+    <label>kc <input id="inKc" type="number" min="1" step="1"></label>
+    <label>mr <input id="inMr" type="number" min="1" step="1"></label>
+    <label>nr <input id="inNr" type="number" min="1" step="1"></label>
+    <label>随机种子 <input id="inSeed" type="number" step="1"></label>
+    <label>L2 容量(KB) <input id="inL2" type="number" min="0.125" step="0.125"></label>
+    <label>L1 容量(KB) <input id="inL1" type="number" min="0.0625" step="0.0625"></label>
+    <label class="check wide"><input id="chkAutoCache" type="checkbox">自动缓存容量(随规模缩放)</label>
+    <label class="wide">C 视图
+      <select id="selView">
+        <option value="value">数值(部分和)</option>
+        <option value="heat">访问热度</option>
+      </select>
+    </label>
+  </div>
+  <div class="cfg-actions">
+    <button id="btnApply" class="primary">应用配置</button>
+    <button id="btnReseed">重新生成数据</button>
+    <span id="cfgNote"></span>
+  </div>
+</div>
+
+<main>
+  <section id="mainView">
+    <canvas id="canvasMain"></canvas>
+    <div id="mainHud">就绪</div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h3>内存层次 <small>容量 · 驻留 · 命中/未中</small></h3>
+      <canvas id="canvasMem"></canvas>
+    </div>
+    <div class="panel">
+      <h3>运行统计</h3>
+      <div id="statsBody"></div>
+    </div>
+    <div class="panel">
+      <h3>事件流时间线 <small>计算 vs 数据搬运</small></h3>
+      <canvas id="canvasTimeline"></canvas>
+    </div>
+    <div class="panel">
+      <h3>Roofline 模型</h3>
+      <canvas id="canvasRoofline"></canvas>
+      <div id="rooflineNote"></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <div id="legend"></div>
+  <div class="tech">BLIS/Goto 风格 6 层循环 · 事件驱动回放 · float64 · 峰值 64 GFLOPS · DRAM 16 GB/s · L2 64 GB/s · L1 256 GB/s · 寄存器 512 GB/s · 空格=播放/暂停 · →=单步</div>
+</footer>
+
+<script src="js/util.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/player.js"></script>
+<script src="js/render-main.js"></script>
+<script src="js/render-mem.js"></script>
+<script src="js/render-charts.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

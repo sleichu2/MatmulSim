@@ -1,0 +1,11 @@
+{
+  "name": "gemm-lab",
+  "version": "1.0.0",
+  "description": "矩阵乘法多层 Tile 可视化：数据搬运、缓存模型与微内核动画",
+  "type": "module",
+  "scripts": {
+    "test": "node test/test.mjs && node test/dom-smoke.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
