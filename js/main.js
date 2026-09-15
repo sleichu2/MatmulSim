@@ -26,6 +26,13 @@
   const memView = new MMemView($('canvasMem'));
   const timeline = new MTimelineView($('canvasTimeline'));
   const roofline = new MRooflineView($('canvasRoofline'));
+  const codeView = new MCodeView($('codeView'));
+
+  /** 回放事件分发：内存搬运动画 + 伪代码当前行 */
+  const onEv = (ev, dwell) => {
+    memView.onEvent(ev, dwell);
+    codeView.onEvent(ev);
+  };
 
   /** 自动缓存容量启发式：L2 ≈ 工作集的 40%，L1 ≈ L2 的 18%（演示缩放，见 README） */
   function heuristicCache(cfg) {
@@ -59,6 +66,7 @@
     mainView.setViewMode(state.viewMode);
     memView.clear();
     timeline.bind(state.player);
+    codeView.setConfig(n.cfg);
 
     ui.fillConfigInputs(n.cfg);
     ui.setCfgNote(n.warnings);
@@ -80,6 +88,7 @@
   function resetAll() {
     state.player.reset();
     memView.clear();
+    codeView.reset();
   }
 
   /* ---------- UI 回调 ---------- */
@@ -95,14 +104,14 @@
       ui.setPlaying(false, false);
     },
     onSeekEnd() {
-      state.player.seekEnd((ev, d) => memView.onEvent(ev, d));
+      state.player.seekEnd(onEv);
       state.playing = false;
       ui.setPlaying(false, true);
     },
     onStep(mode) {
       state.playing = false;
       ui.setPlaying(false, state.player.isEnd);
-      state.player.step(mode, (ev, d) => memView.onEvent(ev, d));
+      state.player.step(mode, onEv);
     },
     onSpeed(v) { state.speed = v; },
     onPreset(id) {
@@ -170,7 +179,7 @@
     const dt = Math.min(100, now - last);
     last = now;
     if (state.playing && !state.player.isEnd) {
-      state.player.advance(dt, state.speed, (ev, d) => memView.onEvent(ev, d));
+      state.player.advance(dt, state.speed, onEv);
       if (state.player.isEnd) {
         state.playing = false;
         ui.setPlaying(false, true);
@@ -179,6 +188,7 @@
     mainView.render(now);
     memView.draw(now, state.player);
     timeline.draw();
+    codeView.draw();
     roofline.draw(state.cfg, state.analysis,
       state.player.flops > 0 ? { ai: state.player.liveAI, gf: state.player.liveGF } : null);
     updateHud();
@@ -220,7 +230,7 @@
     } else if (e.code === 'ArrowRight') {
       state.playing = false;
       ui.setPlaying(false, state.player.isEnd);
-      state.player.step($('#selStep').value, (ev, d) => memView.onEvent(ev, d));
+      state.player.step($('#selStep').value, onEv);
     }
   });
 

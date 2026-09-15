@@ -195,6 +195,78 @@ aside { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflo
 .stat b.ok { color: var(--green); }
 .stat b.warn { color: var(--amber); }
 
+/* ---------- 伪代码面板 ---------- */
+#codeView {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font: 10.5px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.cl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 4px 1px 2px;
+  min-height: 20px;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  transition: background .15s;
+}
+.cl-n { width: 14px; flex: none; text-align: right; color: #39424f; font-size: 9px; }
+.cl-t { flex: 1; min-width: 0; white-space: pre; }
+.cl-r { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+
+/* 缓存层级徽章: L2 面板 / L1 微面板 / 寄存器 */
+.cl-badge {
+  flex: none; font-style: normal; font-size: 8.5px; line-height: 1;
+  padding: 2px 3px; border-radius: 3px; border: 1px solid; letter-spacing: .5px;
+}
+.cl-badge.l2 { color: var(--accent); border-color: #245082; }
+.cl-badge.l1 { color: var(--magenta); border-color: #5a3f82; }
+.cl-badge.reg { color: var(--amber); border-color: #6e5420; }
+
+/* 循环变量实时指示: 值 + 进度条 + 轮次 */
+.cl-val { color: var(--amber); font-size: 10px; font-weight: 600; }
+.cl-bar { width: 28px; height: 4px; border-radius: 2px; background: #1b222d; overflow: hidden; }
+.cl-bar u { display: block; height: 100%; width: 0; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--green)); transition: width .12s linear; }
+.cl-cnt { color: var(--muted); font-style: normal; font-size: 9px; min-width: 26px; text-align: right; }
+
+/* 事件状态标注 */
+.cl-tag { font-size: 9.5px; font-weight: 600; }
+.cl-tag.hit { color: var(--green); }
+.cl-tag.miss { color: var(--red); }
+.cl-tag.warn { color: var(--amber); }
+.cl-tag.store { color: var(--orange); }
+.cl-tag.reg { color: var(--magenta); }
+.cl-tag.calc { color: var(--green); }
+
+/* 当前执行行高亮（按事件类型着色） */
+.cl-load.active {
+  background: linear-gradient(90deg, rgba(88,166,255,.16), rgba(88,166,255,.02));
+  border-left-color: var(--accent);
+}
+.cl-load.active .cl-n { color: var(--accent); }
+.cl-compute.active {
+  background: linear-gradient(90deg, rgba(63,185,80,.18), rgba(63,185,80,.02));
+  border-left-color: var(--green);
+}
+.cl-compute.active .cl-n { color: var(--green); }
+.cl-store.active {
+  background: linear-gradient(90deg, rgba(240,136,62,.18), rgba(240,136,62,.02));
+  border-left-color: var(--orange);
+}
+.cl-store.active .cl-n { color: var(--orange); }
+.cl-loop.active { background: rgba(255,201,92,.07); border-left-color: var(--amber); }
+
+/* 语法着色 */
+.w-k { color: var(--magenta); }
+.w-v { color: var(--amber); }
+.w-p { color: #93a7bd; }
+.w-a { color: #4c8dff; }
+.w-b { color: var(--green); }
+.w-c { color: var(--orange); }
+
 /* ---------- 页脚 ---------- */
 footer {
   display: flex;

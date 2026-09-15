@@ -142,7 +142,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'btnConfig', 'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend',
+  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, new El(id.startsWith('canvas') ? 'canvas' : 'div')));
 const documentStub = {
@@ -168,7 +168,7 @@ sandbox.window = sandbox;
 vm.createContext(sandbox);
 
 const files = ['js/util.js', 'js/sim.js', 'js/player.js', 'js/render-main.js',
-  'js/render-mem.js', 'js/render-charts.js', 'js/ui.js', 'js/main.js'];
+  'js/render-mem.js', 'js/render-charts.js', 'js/render-code.js', 'js/ui.js', 'js/main.js'];
 const code = files.map((f) => readFileSync(join(root, f), 'utf8')).join('\n;\n');
 vm.runInContext(code, sandbox, { filename: 'app.js' });
 

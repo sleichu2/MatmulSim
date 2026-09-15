@@ -68,7 +68,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'btnConfig', 'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend',
+  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, makeEl(/^canvas/.test(id) ? 'canvas' : 'div')));
 
@@ -97,7 +97,7 @@ vm.createContext(sandbox);
 
 /* ---------- 加载脚本 ---------- */
 const files = ['js/util.js', 'js/sim.js', 'js/player.js', 'js/render-main.js',
-  'js/render-mem.js', 'js/render-charts.js', 'js/ui.js', 'js/main.js'];
+  'js/render-mem.js', 'js/render-charts.js', 'js/render-code.js', 'js/ui.js', 'js/main.js'];
 const code = files.map((f) => readFileSync(join(root, f), 'utf8')).join('\n;\n');
 
 let failures = 0;
@@ -128,6 +128,11 @@ frame(16);
 frame(16);
 check('初始渲染无异常', errs.length === 0, errs[0]);
 
+const codeLines = () => byId.get('codeView').children;
+const activeLine = () => codeLines().findIndex((c) => (c.className || '').indexOf('active') >= 0);
+check('伪代码面板生成 14 行', codeLines().length === 14, codeLines().length);
+check('初始无高亮行', activeLine() === -1, activeLine());
+
 /* 播放到结束（小型预设 ~10s 墙钟 @1×，每帧 50ms → ~200 帧） */
 press(byId.get('btnPlay'));
 for (let i = 0; i < 260 && errs.length === 0; i++) frame(50);
@@ -138,6 +143,13 @@ check('播放按钮变 ↻', byId.get('btnPlay').textContent === '↻', byId.get
 check('FLOPs 统计完整', byId.get('stFlops').textContent.indexOf('/ 8.2K') >= 0, byId.get('stFlops').textContent);
 check('数值校验通过', byId.get('stErr').textContent.indexOf('✓') === 0, byId.get('stErr').textContent);
 
+/* 伪代码面板：播放结束时最后事件 = C 面板写回 → 第 14 行高亮，i2 收敛到最后一块 */
+check('伪代码高亮=写回行(14)', activeLine() === 13, activeLine());
+const i2Chip = codeLines()[0].children[3].children[0].textContent;
+check('伪代码循环变量 i2 收敛', i2Chip === 'i2=8', i2Chip);
+check('伪代码轮次 2/2', codeLines()[0].children[3].children[2].textContent === '2/2',
+  codeLines()[0].children[3].children[2].textContent);
+
 /* 单步与重置 */
 byId.get('btnPlay').onclick(); // ↻ → 重置并播放
 for (let i = 0; i < 4; i++) frame(16);
@@ -145,12 +157,14 @@ press(byId.get('btnReset'));
 frame(16);
 check('重置后进度归零', byId.get('progressText').textContent.indexOf('0.0%') >= 0,
   byId.get('progressText').textContent);
+check('重置后伪代码无高亮', activeLine() === -1, activeLine());
 
 /* k 步单步 */
 byId.get('selStep').value = 'k';
 for (let i = 0; i < 3; i++) press(byId.get('btnStep'));
 frame(16);
 check('单步无异常', errs.length === 0, errs[0]);
+check('单步后伪代码高亮微内核行(13)', activeLine() === 12, activeLine());
 
 /* 无分块预设 */
 const naiveBtn = byId.get('presetBar').children.find((c) => c.dataset.id === 'naive');
