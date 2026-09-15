@@ -13,6 +13,9 @@
 (function (global) {
   'use strict';
 
+  const BW = global.MSim.BW;
+  const LAT = global.MSim.LAT;
+
   // 每个事件类型的回放驻留时长 (ms, 1× 速度)
   // 搬运类事件按字节数缩放：小搬运(缓存行级)快、大搬运(面板级)慢
   const DWELL = {
@@ -51,7 +54,15 @@
       this.dirty = [];          // 需要重绘的 C 单元格 [ri, ci]（平铺: ri,ci,ri,ci…）
       this.dirtyCap = 2 * this.M * this.N; // 平铺上限（格数=M·N）；超出改走全量重绘
       this.credit = 0;          // 回放时间信用（见 advance）
+      this.links = {};          // 链路流量实时镜像: key -> {bytes, ns, n, dirty}（见 linkAdd）
       this.fullRepaint = true;
+    }
+
+    /** 链路流量镜像（与 sim.js xferTime 同一公式，供框图实时显示） */
+    linkAdd(key, bytes, ns, dirty) {
+      const L = this.links[key] || (this.links[key] = { bytes: 0, ns: 0, n: 0, dirty: 0 });
+      L.bytes += bytes; L.ns += ns; L.n++;
+      if (dirty) L.dirty++;
     }
 
     dwellOf(ev) {
@@ -99,13 +110,15 @@
           }
           this.flops += ev.flops;
           this.regB += ev.regBytes;
+          this.linkAdd('l1>reg', ev.regBytes, ev.regBytes / BW.reg);
           break;
         }
         case 'reg':
           if (ev.panel === 'C') this.regC = ev;
           this.regB += ev.bytes;
+          this.linkAdd('l2>reg', ev.bytes, ev.bytes / BW.l2 + LAT.l2);
           break;
-        case 'xfer':
+        case 'xfer': {
           if (ev.from === 'dram') this.dramR += ev.bytes;
           if (ev.from === 'l2' && ev.to === 'dram') { this.dramW += ev.bytes; this.memL2.delete(ev.id); }
           if (ev.to === 'l2' && !ev.oversize) this.memL2.set(ev.id, { panel: ev.panel, bytes: ev.bytes });
@@ -114,7 +127,12 @@
           if (ev.from === 'dram' && ev.to === 'l2' && ev.miss) this.l2Miss++;
           if (ev.from === 'dram' && ev.to === 'l1') this.l2Miss++; // 级联缺失计为 L2 未命中
           if (ev.oversize) this.oversize++;
+          // 链路镜像（与 sim.xferTime 同公式）
+          const dram = ev.from === 'dram' || ev.to === 'dram';
+          const ns = ev.bytes / (dram ? BW.dram : BW[ev.from]) + (dram ? LAT.dram : LAT.l2);
+          this.linkAdd(ev.from + '>' + ev.to, ev.bytes, ns, ev.dirty);
           break;
+        }
         case 'hit':
           if (ev.level === 'l2') this.l2Hit++; else this.l1Hit++;
           break;

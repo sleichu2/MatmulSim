@@ -15,6 +15,7 @@
  *  9. 延迟模型：记账事件零耗时、事务=带宽+固定延迟、延迟随块摊销
  * 10. 循环顺序：90 种合法嵌套全部数值正确、非法回退、顺序改变行为
  * 11. 超大矩阵：256³ 预设流量界、事件量预警
+ * 12. 写路径与链路统计：脏替换、每面板恰写一次、流量配平、Player 镜像
  * ============================================================ */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -314,6 +315,74 @@ console.log('=== 11. 超大矩阵 ===');
       .warnings.some((w) => w.indexOf('事件轨迹') === 0));
   check('正常规模无预警', MSim.normalize({ M: 96, N: 96, K: 96, mc: 32, nc: 32, kc: 32, mr: 8, nr: 8 })
     .warnings.length === 0);
+}
+
+console.log('=== 12. 写路径与链路统计: 脏替换 / 配平 / 实测带宽 / Player 镜像 ===');
+{
+  // 12a. 默认配置：C 常驻 → 无脏替换；链路流量与既有统计配平
+  {
+    const cfg = MSim.normalize(MSim.PRESETS[0].cfg).cfg;
+    const res = MSim.buildTrace(cfg);
+    const L = res.stats.links;
+    check('默认配置无脏替换写回', !res.events.some((e) => e.dirty), L['l2>dram'].dirty);
+    check('dram>l2 流量 == dramRead', L['dram>l2'].bytes === res.stats.dramRead,
+      L['dram>l2'].bytes + ' vs ' + res.stats.dramRead);
+    check('l2>l1 流量 == l2Bytes', L['l2>l1'].bytes === res.stats.l2Bytes,
+      L['l2>l1'].bytes + ' vs ' + res.stats.l2Bytes);
+    check('l2>dram 流量 == dramWrite', L['l2>dram'].bytes === res.stats.dramWrite,
+      L['l2>dram'].bytes + ' vs ' + res.stats.dramWrite);
+    check('l2>reg 流量 == C 微块字节 (MNK/kc·8)',
+      L['l2>reg'].bytes === 16 ** 3 / 8 * 8, L['l2>reg'].bytes);
+    check('l1>reg 流量 == 操作数字节 (MNK(1/mr+1/nr)·8)',
+      L['l1>reg'].bytes === 16 ** 3 * (1 / 4 + 1 / 4) * 8, L['l1>reg'].bytes);
+  }
+
+  // 12b. 实测带宽 < 理论（延迟压制）；大块利用率更高（摊销）
+  {
+    const cfg = MSim.normalize(MSim.PRESETS[0].cfg).cfg;
+    const L = MSim.buildTrace(cfg).stats.links;
+    check('dram>l2 实测带宽 < 理论 16B/ns (延迟压制)',
+      L['dram>l2'].bw > 0 && L['dram>l2'].bw < 16, L['dram>l2'].bw.toFixed(2));
+  }
+
+  // 12c. 脏替换：L2 装不下 C+A+B 共存 → C 中途脏替换冲刷，最终写回跳过，
+  //      每 C 面板恰好写回一次（总写 == M·N·8 不变）
+  {
+    const cfg = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4,
+      l2KB: 1.5, l1KB: 1 }).cfg;
+    const res = MSim.buildTrace(cfg);
+    const dirtyEv = res.events.filter((e) => e.type === 'xfer' && e.dirty);
+    check('脏替换写回事件存在且全为 C 面板',
+      dirtyEv.length > 0 && dirtyEv.every((e) => e.panel === 'C' && e.store === true),
+      dirtyEv.length);
+    check('总写 == M\u00b7N\u00b78 (每面板恰写一次)', res.stats.dramWrite === 16 * 16 * 8,
+      res.stats.dramWrite);
+    check('默认无分块: C 块全部走脏替换 (淘汰即冲刷)', (() => {
+      const cfgN = MSim.normalize({ M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1,
+        l2KB: 0.125, l1KB: 0.0625 }).cfg;
+      const resN = MSim.buildTrace(cfgN);
+      const dirtyN = resN.events.filter((e) => e.type === 'xfer' && e.dirty).length;
+      const finalN = resN.events.filter((e) => e.type === 'xfer' && e.store && !e.dirty).length;
+      return dirtyN === 256 && finalN === 0 && resN.stats.dramWrite === 16 * 16 * 8;
+    })());
+  }
+
+  // 12d. Player 链路镜像 == 模拟器链路统计（终态一致）
+  {
+    const cfg = MSim.normalize(MSim.PRESETS[0].cfg).cfg;
+    const res = MSim.buildTrace(cfg);
+    const A = MSim.randMatrix(cfg.M, cfg.K, 1), B = MSim.randMatrix(cfg.K, cfg.N, 2);
+    const player = new MPlayer({ events: res.events, cfg, A, B, refC: null });
+    player.seekEnd();
+    const keys = new Set([...Object.keys(player.links), ...Object.keys(res.stats.links)]);
+    let same = true;
+    for (const k of keys) {
+      const a = player.links[k] || { bytes: 0, ns: 0, n: 0, dirty: 0 };
+      const b = res.stats.links[k] || { bytes: 0, ns: 0, n: 0, dirty: 0 };
+      if (a.bytes !== b.bytes || Math.abs(a.ns - b.ns) > 1e-6 || a.n !== b.n || a.dirty !== b.dirty) same = false;
+    }
+    check('Player 链路镜像 == 模拟器统计', same, JSON.stringify(player.links));
+  }
 }
 
 if (failures) {

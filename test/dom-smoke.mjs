@@ -65,7 +65,7 @@ function makeEl(tag) { return new El(tag); }
 
 // index.html 中存在的全部 id（应用按 id 查询）
 const STATIC_IDS = [
-  'canvasMain', 'canvasMem', 'canvasTimeline', 'canvasRoofline', 'mainView', 'mainHud',
+  'canvasMain', 'canvasMem', 'canvasHier', 'canvasTimeline', 'canvasRoofline', 'mainView', 'mainHud',
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
@@ -98,7 +98,8 @@ vm.createContext(sandbox);
 
 /* ---------- 加载脚本 ---------- */
 const files = ['js/util.js', 'js/sim.js', 'js/player.js', 'js/render-main.js',
-  'js/render-mem.js', 'js/render-charts.js', 'js/render-code.js', 'js/ui.js', 'js/main.js'];
+  'js/render-mem.js', 'js/render-hier.js', 'js/render-charts.js', 'js/render-code.js',
+  'js/ui.js', 'js/main.js'];
 const code = files.map((f) => readFileSync(join(root, f), 'utf8')).join('\n;\n');
 
 let failures = 0;

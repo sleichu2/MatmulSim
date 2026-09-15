@@ -149,12 +149,15 @@
     return C;
   }
 
-  /* ---------- 容量受限 LRU 缓存模型 ---------- */
+  /* ---------- 容量受限 LRU 缓存模型 ----------
+   * 块携带脏位：C 面板是唯一可写数据（写分配/读改写语义，载入即脏），
+   * A/B 面板只读恒为干净块。脏块被 LRU 淘汰 = 脏替换，须先冲刷回
+   * 下一层（L2 脏块 → DRAM 写回），产生写流量；干净块淘汰零流量。 */
   class MemoryModel {
     constructor(cfg) {
       this.capL2 = cfg.l2Bytes;
       this.capL1 = cfg.l1Bytes;
-      this.l2 = new Map(); // id -> {panel, bytes, last}
+      this.l2 = new Map(); // id -> {panel, bytes, last, dirty, i2, j2}
       this.l1 = new Map();
       this.clock = 0;
       this.stats = {
@@ -163,18 +166,22 @@
       };
     }
     lookup(level, id) { return (level === 'l2' ? this.l2 : this.l1).has(id); }
+    get(level, id) { return (level === 'l2' ? this.l2 : this.l1).get(id) || null; }
     touch(level, id) {
       const b = (level === 'l2' ? this.l2 : this.l1).get(id);
       if (b) b.last = ++this.clock;
     }
-    insert(level, id, panel, bytes) {
+    insert(level, id, panel, bytes, opts) {
       const m = level === 'l2' ? this.l2 : this.l1;
       const cap = level === 'l2' ? this.capL2 : this.capL1;
       const st = this.stats[level];
       const evicted = [];
       // 块本身大于容量 → 无法驻留（后续每次访问都级联到下一层）
       if (bytes > cap) { st.oversize++; return { evicted, resident: false }; }
-      m.set(id, { panel, bytes, last: ++this.clock });
+      m.set(id, {
+        panel, bytes, last: ++this.clock,
+        dirty: !!(opts && opts.dirty), i2: opts && opts.i2, j2: opts && opts.j2,
+      });
       let total = 0;
       for (const b of m.values()) total += b.bytes;
       while (total > cap) {
@@ -183,7 +190,8 @@
         total -= lru.bytes;
         m.delete(lruId);
         st.evict++;
-        evicted.push(lruId);
+        evicted.push({ id: lruId, panel: lru.panel, bytes: lru.bytes,
+          dirty: lru.dirty, i2: lru.i2, j2: lru.j2 });
       }
       return { evicted, resident: true };
     }
@@ -201,15 +209,42 @@
     // 与此处无关）——此前 0.5ns 的记账时长曾占无分块预设 59% 的 totalTime。
     const emit = (ev, durNs) => { ev.t = t; events.push(ev); t += durNs; return ev; };
 
+    /** 链路流量统计：key = from>to，实测带宽 = bytes/ns（含延迟，
+     *  小块事务被延迟压制的程度由此可见——「真实带宽」对理论常数的比
+     *  即链路利用率）。 */
+    const links = {};
+    const linkAdd = (key, bytes, ns, dirty) => {
+      const L = links[key] || (links[key] = { bytes: 0, ns: 0, n: 0, dirty: 0 });
+      L.bytes += bytes; L.ns += ns; L.n++;
+      if (dirty) L.dirty++;
+    };
+
     /** 搬运时长 = 带宽项 + 固定延迟项。带宽按瓶颈侧计（DRAM 参与读/写
      *  都按 DRAM 带宽）；延迟按事务类型计——块越小延迟占比越大，
      *  「分块摊销延迟」由模型自然产生（见 README）。 */
     let xferNs = 0;   // 全部 xfer 事件真实时长累计（含延迟）
-    const xferTime = (from, to, bytes) => {
+    const xferTime = (from, to, bytes, dirty) => {
       const dram = from === 'dram' || to === 'dram';
       const d = bytes / (dram ? BW.dram : BW[from]) + (dram ? LAT.dram : LAT.l2);
       xferNs += d;
+      linkAdd(from + '>' + to, bytes, d, dirty);
       return d;
+    };
+
+    /** L2 淘汰块处理：干净块零流量；脏块（C 面板）须冲刷回 DRAM
+     *  ——脏替换写回，计入 flushed 集合以跳过其后的最终写回（防双计） */
+    const flushed = new Set();
+    const flushEvicted = (evicted) => {
+      for (const b of evicted) {
+        emit({ type: 'evict', level: 'l2', id: b.id }, 0);
+        if (b.dirty) {
+          dramWrite += b.bytes;
+          flushed.add(b.id);
+          emit({ type: 'xfer', from: 'l2', to: 'dram', id: b.id, panel: b.panel,
+            bytes: b.bytes, store: true, dirty: true, i2: b.i2, j2: b.j2 },
+          xferTime('l2', 'dram', b.bytes, true));
+        }
+      }
     };
 
     let dramRead = 0, dramWrite = 0, l2Bytes = 0, l1Bytes = 0, regBytes = 0, flops = 0;
@@ -224,7 +259,7 @@
       }
       mm.stats.l2.miss++;
       const { evicted, resident } = mm.insert('l2', id, panel, bytes);
-      for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
+      flushEvicted(evicted);
       if (!resident) {
         // 面板大于 L2 容量 → 不驻留；数据按需通过 L1 级联读取（不再整块读入，避免重复计数）
         emit({ type: 'oversize', level: 'l2', id, bytes, miss: true }, 0);
@@ -234,7 +269,8 @@
       emit({ type: 'xfer', from: 'dram', to: 'l2', id, panel, bytes, miss: true }, xferTime('dram', 'l2', bytes));
     };
 
-    /** 请求 L1 微面板（Ar/Br）；L2 缺失时级联到 DRAM */
+    /** 请求 L1 微面板（Ar/Br）；L2 缺失时级联到 DRAM。Ar/Br 只读
+     *  恒为干净块，L1 淘汰不产生写回流量。 */
     const requestL1 = (id, tileId, panel, bytes) => {
       if (mm.lookup('l1', id)) {
         mm.stats.l1.hit++;
@@ -244,18 +280,18 @@
       }
       mm.stats.l1.miss++;
       const { evicted, resident } = mm.insert('l1', id, panel, bytes);
-      for (const eid of evicted) emit({ type: 'evict', level: 'l1', id: eid }, 0);
+      for (const b of evicted) emit({ type: 'evict', level: 'l1', id: b.id }, 0);
       if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes }, 0);
-      if (mm.lookup('l2', tileId)) {
-        l2Bytes += bytes;
-        emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
-      } else {
+      if (!mm.lookup('l2', tileId)) {
         // 级联缺失：L2 中无对应面板（容量不足/被淘汰）→ 直接访问 DRAM
         mm.stats.l2.miss++;
         dramRead += bytes;
         emit({ type: 'xfer', from: 'dram', to: 'l1', id, panel, bytes, miss: true, cascade: true },
           xferTime('dram', 'l1', bytes));
+        return;
       }
+      l2Bytes += bytes;
+      emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
     };
 
     /* ----- 顺序驱动的执行引擎 -----
@@ -297,12 +333,12 @@
       const { i2, j2, k2, ir, jr, kr, mcE, ncE, kcE, mrE, nrE } = ctx;
       const bi = i2 / mc, bj = j2 / nc, bk = k2 / kc;
       if (key === 'C') {
-        // C 块 → L2（整个内层循环期间驻留，最终写回 DRAM）
+        // C 块 → L2（写分配/读改写：载入即脏；整个内层循环期间驻留，最终写回）
         const cId = 'C:' + bi + ':' + bj;
         const cBytes = mcE * ncE * ELEM;
         mm.stats.l2.miss++; // 首触必缺
-        const { evicted, resident } = mm.insert('l2', cId, 'C', cBytes);
-        for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
+        const { evicted, resident } = mm.insert('l2', cId, 'C', cBytes, { dirty: true, i2, j2 });
+        flushEvicted(evicted);
         dramRead += cBytes;
         emit({ type: 'xfer', from: 'dram', to: 'l2', id: cId, panel: 'C', bytes: cBytes,
           miss: true, oversize: !resident, i2, j2 }, xferTime('dram', 'l2', cBytes));
@@ -315,27 +351,34 @@
       } else if (key === 'Br') {
         requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
       } else if (key === 'Reg') {
-        // C 微块载入寄存器（跨其内层的 kr 循环驻留）
+        // C 微块载入寄存器：物理上是 L2 读（带宽与延迟按 L2 链路计），
+        // 跨其内层的 kr 循环驻留；寄存器写回即最终的 C 写路径
         const bytes = mrE * nrE * ELEM;
         regBytes += bytes;
-        emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes },
-          bytes / BW.reg);
+        const d = bytes / BW.l2 + LAT.l2;
+        linkAdd('l2>reg', bytes, d);
+        emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes }, d);
       } else if (key === 'MAC') {
-        // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）
+        // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）；
+        // 操作数流经 L1→Reg 端口（与 FMA 串行，见 README 简化声明）
         const f = 2 * mrE * nrE;
-        regBytes += (mrE + nrE) * ELEM;
+        const ob = (mrE + nrE) * ELEM;
+        regBytes += ob;
+        linkAdd('l1>reg', ob, ob / BW.reg);
         flops += f;
         emit({
           type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
-          flops: f, i2, j2, k2, regBytes: (mrE + nrE) * ELEM,
-        }, f / PEAK + (mrE + nrE) * ELEM / BW.reg);
-      } else { // Store: C 块写回
+          flops: f, i2, j2, k2, regBytes: ob,
+        }, f / PEAK + ob / BW.reg);
+      } else { // Store: C 块写回（若已被脏替换冲刷则跳过，防双计）
         const cId = 'C:' + bi + ':' + bj;
         const cBytes = mcE * ncE * ELEM;
-        mm.remove('l2', cId);
-        dramWrite += cBytes;
-        emit({ type: 'xfer', from: 'l2', to: 'dram', id: cId, panel: 'C', bytes: cBytes, store: true, i2, j2 },
-          xferTime('l2', 'dram', cBytes));
+        if (!flushed.has(cId)) {
+          mm.remove('l2', cId);
+          dramWrite += cBytes;
+          emit({ type: 'xfer', from: 'l2', to: 'dram', id: cId, panel: 'C', bytes: cBytes, store: true, i2, j2 },
+            xferTime('l2', 'dram', cBytes));
+        }
       }
     };
 
@@ -359,12 +402,29 @@
 
     const computeTime = flops / PEAK;
 
+    // 链路统计：实测带宽 = bytes/ns（含固定延迟）；理论 = 瓶颈侧带宽常量
+    const THEORY = {
+      'dram>l2': BW.dram, 'l2>l1': BW.l2, 'dram>l1': BW.dram,
+      'l2>reg': BW.l2, 'l1>reg': BW.reg, 'l2>dram': BW.dram,
+    };
+    const linkStats = {};
+    for (const key of Object.keys(links)) {
+      const L = links[key];
+      const bw = L.ns ? L.bytes / L.ns : 0;
+      const theory = THEORY[key] || 0;
+      linkStats[key] = {
+        bytes: L.bytes, ns: L.ns, n: L.n, dirty: L.dirty,
+        bw, theory, util: theory ? bw / theory : 0,
+      };
+    }
+
     return {
       events, cfg,
       stats: {
         l2: mm.stats.l2, l1: mm.stats.l1,
         flops, dramRead, dramWrite, l2Bytes, l1Bytes: regBytes, regBytes,
         computeTime, transferTime: xferNs, totalTime: t,
+        links: linkStats,
         ai: flops / Math.max(1, dramRead + dramWrite),   // 算术强度 FLOP/B
         achieved: flops / Math.max(1, t),                // GFLOPS（串行回放）
       },

@@ -194,6 +194,7 @@ aside { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflo
 }
 .panel h3 small { color: #5b6675; font-weight: 400; margin-left: 6px; letter-spacing: 0; }
 #canvasMem { width: 100%; height: 250px; display: block; }
+#canvasHier { width: 100%; height: 240px; display: block; }
 #canvasTimeline { width: 100%; height: 62px; display: block; }
 #canvasRoofline { width: 100%; height: 168px; display: block; }
 #rooflineNote { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }

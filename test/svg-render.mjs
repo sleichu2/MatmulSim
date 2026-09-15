@@ -139,7 +139,7 @@ class El {
   getBoundingClientRect() { return { width: 1180, height: 660 }; }
 }
 const STATIC_IDS = [
-  'canvasMain', 'canvasMem', 'canvasTimeline', 'canvasRoofline', 'mainView', 'mainHud',
+  'canvasMain', 'canvasMem', 'canvasHier', 'canvasTimeline', 'canvasRoofline', 'mainView', 'mainHud',
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
@@ -169,7 +169,8 @@ sandbox.window = sandbox;
 vm.createContext(sandbox);
 
 const files = ['js/util.js', 'js/sim.js', 'js/player.js', 'js/render-main.js',
-  'js/render-mem.js', 'js/render-charts.js', 'js/render-code.js', 'js/ui.js', 'js/main.js'];
+  'js/render-mem.js', 'js/render-hier.js', 'js/render-charts.js', 'js/render-code.js',
+  'js/ui.js', 'js/main.js'];
 const code = files.map((f) => readFileSync(join(root, f), 'utf8')).join('\n;\n');
 vm.runInContext(code, sandbox, { filename: 'app.js' });
 

@@ -26,6 +26,7 @@
   /* ---------- 视图 ---------- */
   const mainView = new MMainView($('canvasMain'));
   const memView = new MMemView($('canvasMem'));
+  const hierView = new MHierView($('canvasHier'));
   const timeline = new MTimelineView($('canvasTimeline'));
   const roofline = new MRooflineView($('canvasRoofline'));
   const codeView = new MCodeView($('codeView'));
@@ -209,6 +210,7 @@
     }
     mainView.render(now);
     memView.draw(now, state.player);
+    hierView.draw(state.player, state.cfg);
     timeline.draw();
     codeView.draw();
     roofline.draw(state.cfg, state.analysis,
@@ -235,6 +237,10 @@
   observe($('canvasMem'), () => {
     const r = $('canvasMem').getBoundingClientRect();
     memView.resize(r.width, r.height, dprOf());
+  });
+  observe($('canvasHier'), () => {
+    const r = $('canvasHier').getBoundingClientRect();
+    hierView.resize(r.width, r.height, dprOf());
   });
   observe($('canvasTimeline'), () => {
     const r = $('canvasTimeline').getBoundingClientRect();
