@@ -57,8 +57,8 @@
     if (c.kc > c.K) { c.kc = c.K; warnings.push('kc 超过 K，已钳制为 K'); }
     if (c.mr > c.mc) { c.mr = c.mc; warnings.push('mr 不能大于 mc，已钳制'); }
     if (c.nr > c.nc) { c.nr = c.nc; warnings.push('nr 不能大于 nc，已钳制'); }
-    if (c.mr > c.M) { c.mr = c.M; warnings.push('mr 超过 M，已钳制'); }
-    if (c.nr > c.N) { c.nr = c.N; warnings.push('nr 超过 N，已钳制'); }
+    if (c.mr > c.M) { c.mr = c.M; warnings.push('mr 超过 M，已钳制为 M'); }
+    if (c.nr > c.N) { c.nr = c.N; warnings.push('nr 超过 N，已钳制为 N'); }
     if (c.M % c.mc) warnings.push('M 不被 mc 整除，存在边缘块');
     if (c.N % c.nc) warnings.push('N 不被 nc 整除，存在边缘块');
     if (c.K % c.kc) warnings.push('K 不被 kc 整除，存在边缘块');
