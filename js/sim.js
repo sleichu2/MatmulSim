@@ -308,9 +308,10 @@
         requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
       } else if (key === 'Reg') {
         // C 微块载入寄存器（跨其内层的 kr 循环驻留）
-        regBytes += mrE * nrE * ELEM;
-        emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE },
-          mrE * nrE * ELEM / BW.reg);
+        const bytes = mrE * nrE * ELEM;
+        regBytes += bytes;
+        emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes },
+          bytes / BW.reg);
       } else if (key === 'MAC') {
         // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）
         const f = 2 * mrE * nrE;
