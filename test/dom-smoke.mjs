@@ -55,6 +55,7 @@ class El {
   set id(v) { this._id = v; if (v) byId.set(v, this); }
   get id() { return this._id; }
   appendChild(c) { this.children.push(c); return c; }
+  removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); return c; }
   querySelectorAll() { return this.children.filter((c) => c.tagName === 'BUTTON'); }
   getContext() { if (!this._ctx) { this._ctx = makeCtxProxy(); this._ctx.canvas = this; } return this._ctx; }
   getBoundingClientRect() { return { width: 1200, height: 700 }; }
@@ -68,7 +69,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
+  'selView', 'selOrder', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, makeEl(/^canvas/.test(id) ? 'canvas' : 'div')));
 
@@ -225,6 +226,26 @@ press(tightBtn2);
 frame(16);
 check('预设切换后自动容量被关闭', byId.get('chkAutoCache').checked === false);
 check('预设自带容量不被覆盖', String(byId.get('inL2').value) === '1', byId.get('inL2').value);
+
+/* 循环顺序：下拉应有 90 项；切非默认顺序 → 应用 → 播放 → 伪代码面板重建 */
+check('循环序下拉 90 项', byId.get('selOrder').children.length === 90,
+  byId.get('selOrder').children.length);
+byId.get('selOrder').value = 'i2,j2,k2,kr,ir,jr';
+press(byId.get('btnApply'));
+frame(16);
+check('自定义循环序应用无异常', errs.length === 0, errs[0]);
+check('循环序伪代码仍 14 行', codeLines().length === 14, codeLines().length);
+press(byId.get('btnEnd'));
+frame(16);
+check('自定义循环序运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,
+  byId.get('progressText').textContent);
+check('自定义循环序数值校验', byId.get('stErr').textContent.indexOf('✓') === 0,
+  byId.get('stErr').textContent);
+check('自定义循环序结束高亮写回行', activeLine() === 13, activeLine());
+byId.get('selOrder').value = 'i2,j2,k2,ir,jr,kr';
+press(byId.get('btnApply'));
+frame(16);
+check('恢复默认循环序无异常', errs.length === 0, errs[0]);
 
 /* 热度视图切换 */
 byId.get('selView').value = 'heat';

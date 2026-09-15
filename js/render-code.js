@@ -1,41 +1,66 @@
 /* ============================================================
  * render-code.js — 伪代码面板：切分与循环的实时回放
  *
- * 静态展示与 sim.js buildTrace 逐行对应的 6 层循环伪代码，
+ * 伪代码行按 cfg.order（6 层循环嵌套顺序，外→内）动态生成：
+ * 每条 load 语句挂在其坐标依赖中「最内层」的循环体内，乘加语句
+ * 在 inner(ir,jr,kr) 循环体内，C 写回在 inner(i2,j2) 循环体之后
+ * ——与 sim.js 的执行引擎同一套绑定规则，任意合法顺序下都与
+ * 回放事件一一对应。
+ *
  * 回放时随事件实时更新：
  *  - 当前事件对应的代码行高亮（载入蓝 / 计算绿 / 写回橙），
  *    行尾标注 命中✓ / 未中 / 级联 / 超容量 / FLOP 等状态
  *  - 6 个循环变量 i2/j2/k2/ir/jr/kr 的当前值、轮次 x/y 与
  *    迷你进度条实时推进——直观呈现「切分」的执行情况
- *
- * 事件 → 代码行 映射（依据 trace 事件结构）：
- *   xfer(dram→l2, C) → 3 行     hit/oversize/xfer(A:|B:) → 5/6 行
- *   hit/oversize/xfer(Ar:|Br:) → 8/10 行    reg → 11 行
- *   compute → 13 行    xfer(l2→dram) → 14 行
- *   evict → 伴随事件，不改行（随后紧跟的搬运事件会更新）
  * ============================================================ */
 (function (global) {
   'use strict';
   const U = global.MUtil;
 
-  /* 行定义: t=代码文本(每层缩进 1 空格)  k=行类型 loop|load|compute|store
-   *         v=循环变量名  lv=所属缓存层级徽章 l2|l1|reg */
-  const LINES = [
-    { t: 'for i2 = 0 .. M step mc', k: 'loop', v: 'i2', lv: 'l2' },
-    { t: ' for j2 = 0 .. N step nc', k: 'loop', v: 'j2', lv: 'l2' },
-    { t: '  load C[i2:+mc, j2:+nc] → L2', k: 'load' },
-    { t: '  for k2 = 0 .. K step kc', k: 'loop', v: 'k2', lv: 'l2' },
-    { t: '   load A[i2:+mc, k2:+kc] → L2', k: 'load' },
-    { t: '   load B[k2:+kc, j2:+nc] → L2', k: 'load' },
-    { t: '   for ir = i2 .. +mc step mr', k: 'loop', v: 'ir', lv: 'l1' },
-    { t: '    load Ar[ir:+mr, k2:+kc] → L1', k: 'load' },
-    { t: '    for jr = j2 .. +nc step nr', k: 'loop', v: 'jr', lv: 'l1' },
-    { t: '     load Br[k2:+kc, jr:+nr] → L1', k: 'load' },
-    { t: '     load C[ir:+mr, jr:+nr] → Reg', k: 'load' },
-    { t: '     for kr = k2 .. +kc step 1', k: 'loop', v: 'kr', lv: 'reg' },
-    { t: '      C[ir:+mr, jr:+nr] += A[:,kr] ⊗ B[kr,:]', k: 'compute' },
-    { t: '  write C[i2:+mc, j2:+nc] → DRAM', k: 'store' },
-  ];
+  /* ---------- 行文本模板（与循环顺序无关的部分） ---------- */
+  const LOOP_TEXT = {
+    i2: 'for i2 = 0 .. M step mc',
+    j2: 'for j2 = 0 .. N step nc',
+    k2: 'for k2 = 0 .. K step kc',
+    ir: 'for ir = i2 .. +mc step mr',
+    jr: 'for jr = j2 .. +nc step nr',
+    kr: 'for kr = k2 .. +kc step 1',
+  };
+  const LOOP_BADGE = { i2: 'l2', j2: 'l2', k2: 'l2', ir: 'l1', jr: 'l1', kr: 'reg' };
+  const LOAD_TEXT = {
+    C: 'load C[i2:+mc, j2:+nc] → L2',
+    A: 'load A[i2:+mc, k2:+kc] → L2',
+    B: 'load B[k2:+kc, j2:+nc] → L2',
+    Ar: 'load Ar[ir:+mr, k2:+kc] → L1',
+    Br: 'load Br[k2:+kc, jr:+nr] → L1',
+    Reg: 'load C[ir:+mr, jr:+nr] → Reg',
+  };
+  const COMPUTE_TEXT = 'C[ir:+mr, jr:+nr] += A[:,kr] ⊗ B[kr,:]';
+  const STORE_TEXT = 'write C[i2:+mc, j2:+nc] → DRAM';
+
+  /** 按 order 生成行定义（与 sim.js 执行引擎同一套绑定规则） */
+  function buildLines(order) {
+    const pos = {};
+    order.forEach((v, i) => { pos[v] = i; });
+    const innerOf = (vars) => vars.reduce((a, b) => (pos[a] > pos[b] ? a : b));
+    const FIRE = {
+      C: innerOf(['i2', 'j2']), A: innerOf(['i2', 'k2']), B: innerOf(['j2', 'k2']),
+      Ar: innerOf(['ir', 'k2']), Br: innerOf(['jr', 'k2']), Reg: innerOf(['ir', 'jr']),
+    };
+    const enter = {};
+    order.forEach((v) => { enter[v] = []; });
+    ['C', 'A', 'B', 'Ar', 'Br', 'Reg'].forEach((key) => enter[FIRE[key]].push(key));
+    const lines = [];
+    order.forEach((v, depth) => {
+      lines.push({ t: ' '.repeat(depth) + LOOP_TEXT[v], k: 'loop', v, lv: LOOP_BADGE[v] });
+      for (const key of enter[v])
+        lines.push({ t: ' '.repeat(depth + 1) + LOAD_TEXT[key], k: 'load', req: key });
+      if (v === innerOf(['ir', 'jr', 'kr']))
+        lines.push({ t: ' '.repeat(depth + 1) + COMPUTE_TEXT, k: 'compute', req: 'MAC' });
+    });
+    lines.push({ t: ' '.repeat(pos[innerOf(['i2', 'j2'])] + 1) + STORE_TEXT, k: 'store', req: 'Store' });
+    return lines;
+  }
 
   const LOOP_VAR_IDS = { i2: 1, j2: 1, k2: 1, ir: 1, jr: 1, kr: 1 };
   const PARAM_IDS = { mc: 1, nc: 1, kc: 1, mr: 1, nr: 1, M: 1, N: 1, K: 1 };
@@ -45,10 +70,11 @@
       this.root = root;
       this.cfg = null;
       this.rows = [];
+      this.lineByReq = {};   // 语义语句 → 行号（1 基）
+      this.orderKey = '';
       this.st = this.freshState();
       this.sig = null;
-      this.activeRow = 0;   // 当前高亮行（1 基，0=无）
-      this.build();
+      this.activeRow = 0;    // 当前高亮行（1 基，0=无）
     }
 
     freshState() {
@@ -58,10 +84,13 @@
       };
     }
 
-    /* ---------- DOM 构建（一次性） ---------- */
-    build() {
+    /* ---------- DOM 构建（顺序变化时重建） ---------- */
+    rebuild(order) {
       const doc = global.document;
-      LINES.forEach((def, i) => {
+      while (this.root.children.length) this.root.removeChild(this.root.children[0]);
+      this.rows = [];
+      this.lineByReq = {};
+      buildLines(order).forEach((def, i) => {
         const el = doc.createElement('div');
         el.className = 'cl cl-' + def.k;
         const num = doc.createElement('span');
@@ -81,7 +110,7 @@
 
         const right = doc.createElement('span');
         right.className = 'cl-r';
-        const row = { el, kind: def.k, varName: def.v || null };
+        const row = { el, kind: def.k, varName: def.v || null, req: def.req || null };
         if (def.k === 'loop') {
           const val = doc.createElement('b');
           val.className = 'cl-val';
@@ -105,6 +134,7 @@
         el.appendChild(right);
         this.root.appendChild(el);
         this.rows.push(row);
+        if (def.req) this.lineByReq[def.req] = i + 1;
       });
     }
 
@@ -128,7 +158,15 @@
     }
 
     /* ---------- 状态 ---------- */
-    setConfig(cfg) { this.cfg = cfg; this.reset(); }
+    setConfig(cfg) {
+      const key = (cfg.order || []).join(',');
+      if (key !== this.orderKey) {
+        this.orderKey = key;
+        this.rebuild(cfg.order);
+      }
+      this.cfg = cfg;
+      this.reset();
+    }
 
     reset() {
       this.st = this.freshState();
@@ -136,13 +174,13 @@
       this.draw();
     }
 
-    /* 事件 id → 代码行号（1 基） */
-    lineOfId(id) {
-      if (id.indexOf('Ar') === 0) return 8;
-      if (id.indexOf('Br') === 0) return 10;
-      if (id.charAt(0) === 'A') return 5;
-      if (id.charAt(0) === 'B') return 6;
-      return 3;
+    /* 事件 id 前缀 → 语义语句键 */
+    reqOfId(id) {
+      if (id.indexOf('Ar') === 0) return 'Ar';
+      if (id.indexOf('Br') === 0) return 'Br';
+      if (id.charAt(0) === 'A') return 'A';
+      if (id.charAt(0) === 'B') return 'B';
+      return 'C';
     }
 
     /* 事件 id 中解析循环变量坐标（块索引×块尺寸；块内起点用 round 复原） */
@@ -168,48 +206,49 @@
       }
     }
 
-    /** 每个回放事件 → 更新当前行与循环变量 */
+    /** 每个回放事件 → 更新当前行与循环变量（evict 为伴随事件，不改行） */
     onEvent(ev) {
       const st = this.st;
+      const L = this.lineByReq;
       const assign = (o) => { for (const key in o) st[key] = o[key]; };
       switch (ev.type) {
         case 'compute':
-          st.line = 13;
+          st.line = L.MAC;
           st.tag = { text: ev.flops + ' FLOP', cls: 'calc' };
           assign({ i2: ev.i2, j2: ev.j2, k2: ev.k2, ir: ev.i, jr: ev.j, kr: ev.k });
           break;
         case 'reg':
-          st.line = 11;
+          st.line = L.Reg;
           st.tag = { text: ev.rows + '×' + ev.cols, cls: 'reg' };
           assign({ ir: ev.i, jr: ev.j });
           break;
         case 'hit':
-          st.line = this.lineOfId(ev.id);
+          st.line = L[this.reqOfId(ev.id)];
           st.tag = { text: '命中 ✓', cls: 'hit' };
           assign(this.coordsOf(ev.id));
           break;
         case 'oversize':
-          st.line = this.lineOfId(ev.id);
+          st.line = L[this.reqOfId(ev.id)];
           st.tag = { text: '超容量 · ' + U.fmtBytes(ev.bytes), cls: 'warn' };
           assign(this.coordsOf(ev.id));
           break;
         case 'xfer':
           if (ev.panel === 'C' && ev.to === 'l2') {        // C 面板 → L2
-            st.line = 3;
+            st.line = L.C;
             st.tag = ev.oversize
               ? { text: '超容量 · ' + U.fmtBytes(ev.bytes), cls: 'warn' }
               : { text: '未中 · ' + U.fmtBytes(ev.bytes), cls: 'miss' };
             assign({ i2: ev.i2, j2: ev.j2 });
           } else if (ev.to === 'dram') {                   // C 面板写回
-            st.line = 14;
+            st.line = L.Store;
             st.tag = { text: '写回 · ' + U.fmtBytes(ev.bytes), cls: 'store' };
             assign({ i2: ev.i2, j2: ev.j2 });
           } else if (ev.to === 'l2') {                     // A / B 面板 → L2
-            st.line = ev.id.charAt(0) === 'A' ? 5 : 6;
+            st.line = L[this.reqOfId(ev.id)];
             st.tag = { text: '未中 · ' + U.fmtBytes(ev.bytes), cls: 'miss' };
             assign(this.coordsOf(ev.id));
-          } else {                                         // → L1: Ar / Br 微面板
-            st.line = ev.id.indexOf('Ar') === 0 ? 8 : 10;
+          } else {                                          // → L1: Ar / Br 微面板
+            st.line = L[this.reqOfId(ev.id)];
             st.tag = ev.cascade
               ? { text: '级联 · ' + U.fmtBytes(ev.bytes), cls: 'warn' }
               : { text: '未中 · ' + U.fmtBytes(ev.bytes), cls: 'miss' };

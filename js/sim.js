@@ -15,10 +15,17 @@
  *               C[ir:ir+mr, jr:jr+nr] += A[:,kr] ⊗ B[kr,:]
  *       写回 C 块
  *
+ * 6 层循环的嵌套顺序可配置（cfg.order，外→内）。合法性：ir/jr/kr
+ * 的区间边界分别依赖 i2/j2/k2，必须排在其后 → 720 种排列中合法的
+ * 共 90 种（legalOrders()）。数据请求绑定到其坐标依赖中「最内层」
+ * 的循环入口发出（该循环每次迭代必然产生新的坐标组合），任意合法
+ * 顺序下事件语义正确，且缓存命中/缺失模式随顺序自然变化——这正是
+ * 循环重排改变局部性的教学演示点。默认顺序与上面的经典结构等价。
+ *
  * 不直接算数，而是生成一条「事件轨迹」(trace)，由 Player 回放。
  * 数据搬运量按真实 tile 结构精确统计；缓存命中/淘汰由容量受限
  * LRU 模型判定（容量不足时会发生级联缺失 dram→l1）。
- * 时间模型：带宽 + 峰值吞吐（延迟忽略，见 README「真实性与简化」）。
+ * 时间模型：带宽 + 固定延迟 + 峰值吞吐（见 README「真实性与简化」）。
  * ============================================================ */
 (function (global) {
   'use strict';
@@ -27,6 +34,34 @@
   const BW = { dram: 16, l2: 64, l1: 256, reg: 512 }; // 各层带宽 bytes/ns
   const LAT = { dram: 80, l2: 4 };                  // 事务固定延迟 ns：DRAM 参与读/写 80，L2→L1 4
   const ELEM = 8;                                   // float64 = 8 B
+
+  /* ---------- 循环顺序 ---------- */
+  const LOOP_VARS = ['i2', 'j2', 'k2', 'ir', 'jr', 'kr'];
+  const DEFAULT_ORDER = LOOP_VARS.slice();
+
+  /** 合法性：ir/jr/kr 的区间边界依赖 i2/j2/k2，必须排在其后 */
+  function isLegalOrder(order) {
+    if (!Array.isArray(order) || order.length !== 6) return false;
+    if (new Set(order).size !== 6) return false;
+    const pos = {};
+    for (let i = 0; i < 6; i++) {
+      if (LOOP_VARS.indexOf(order[i]) < 0) return false;
+      pos[order[i]] = i;
+    }
+    return pos.ir > pos.i2 && pos.jr > pos.j2 && pos.kr > pos.k2;
+  }
+
+  /** 枚举全部 90 种合法嵌套顺序（外→内） */
+  function legalOrders() {
+    const all = [];
+    const permute = (arr, rest) => {
+      if (!rest.length) { all.push(arr.slice()); return; }
+      for (let i = 0; i < rest.length; i++)
+        permute(arr.concat(rest[i]), rest.slice(0, i).concat(rest.slice(i + 1)));
+    };
+    permute([], LOOP_VARS);
+    return all.filter(isLegalOrder);
+  }
 
   /* ---------- 预设 ---------- */
   const PRESETS = [
@@ -63,6 +98,12 @@
     if (c.M % c.mc) warnings.push('M 不被 mc 整除，存在边缘块');
     if (c.N % c.nc) warnings.push('N 不被 nc 整除，存在边缘块');
     if (c.K % c.kc) warnings.push('K 不被 kc 整除，存在边缘块');
+
+    if (!Array.isArray(c.order)) c.order = DEFAULT_ORDER.slice();
+    if (!isLegalOrder(c.order)) {
+      c.order = DEFAULT_ORDER.slice();
+      warnings.push('循环顺序不合法（ir 需在 i2 后、jr 在 j2 后、kr 在 k2 后），已回退默认');
+    }
 
     c.l2Bytes = Math.max(128, Math.round(Number(c.l2KB) * 1024));
     c.l1Bytes = Math.max(64, Math.round(Number(c.l1KB) * 1024));
@@ -209,67 +250,103 @@
       }
     };
 
-    for (let i2 = 0; i2 < M; i2 += mc) {
-      const mcE = Math.min(mc, M - i2);
-      const bi = i2 / mc;
-      for (let j2 = 0; j2 < N; j2 += nc) {
-        const ncE = Math.min(nc, N - j2);
-        const bj = j2 / nc;
+    /* ----- 顺序驱动的执行引擎 -----
+     * 每条语句在其坐标依赖中「最内层」循环的入口发出（该循环每次迭代
+     * 必然产生新的坐标组合）；C 写回在 inner(i2,j2) 循环体结束处发出。
+     * 合法顺序下乘加循环必为最内层（i2/j2/k2 若嵌进 ir/jr/kr 内部，
+     * 与其边界依赖矛盾）。默认顺序与经典 BLIS 结构逐事件等价。 */
+    const order = cfg.order;
+    const pos = {};
+    order.forEach((v, i) => { pos[v] = i; });
+    const innerOf = (vars) => vars.reduce((a, b) => (pos[a] > pos[b] ? a : b));
+    const FIRE = {
+      C: innerOf(['i2', 'j2']),   // C 面板 → L2
+      A: innerOf(['i2', 'k2']),   // A 面板 → L2
+      B: innerOf(['j2', 'k2']),   // B 面板 → L2
+      Ar: innerOf(['ir', 'k2']),  // A 微面板 → L1
+      Br: innerOf(['jr', 'k2']),  // B 微面板 → L1
+      Reg: innerOf(['ir', 'jr']), // C 微块 → 寄存器
+    };
+    const enter = {};
+    order.forEach((v) => { enter[v] = []; });
+    ['C', 'A', 'B', 'Ar', 'Br', 'Reg'].forEach((key) => enter[FIRE[key]].push(key));
+    const MAC_AT = innerOf(['ir', 'jr', 'kr']);
+    const STORE_AT = innerOf(['i2', 'j2']);
 
-        // C 块 → L2（整个 k2 循环内驻留，最终写回 DRAM）
+    const ctx = { i2: 0, j2: 0, k2: 0, ir: 0, jr: 0, kr: 0,
+      mcE: M, ncE: N, kcE: K, mrE: mr, nrE: nr };
+
+    const RANGE = {
+      i2: () => [0, M, mc],
+      j2: () => [0, N, nc],
+      k2: () => [0, K, kc],
+      ir: () => [ctx.i2, ctx.i2 + ctx.mcE, mr],
+      jr: () => [ctx.j2, ctx.j2 + ctx.ncE, nr],
+      kr: () => [ctx.k2, ctx.k2 + ctx.kcE, 1],
+    };
+
+    const stmt = (key) => {
+      const { i2, j2, k2, ir, jr, kr, mcE, ncE, kcE, mrE, nrE } = ctx;
+      const bi = i2 / mc, bj = j2 / nc, bk = k2 / kc;
+      if (key === 'C') {
+        // C 块 → L2（整个内层循环期间驻留，最终写回 DRAM）
         const cId = 'C:' + bi + ':' + bj;
         const cBytes = mcE * ncE * ELEM;
         mm.stats.l2.miss++; // 首触必缺
-        {
-          const { evicted, resident } = mm.insert('l2', cId, 'C', cBytes);
-          for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
-          dramRead += cBytes;
-          emit({ type: 'xfer', from: 'dram', to: 'l2', id: cId, panel: 'C', bytes: cBytes,
-            miss: true, oversize: !resident, i2, j2 }, xferTime('dram', 'l2', cBytes));
-        }
-
-        for (let k2 = 0; k2 < K; k2 += kc) {
-          const kcE = Math.min(kc, K - k2);
-          const bk = k2 / kc;
-          requestL2('A:' + bi + ':' + bk, 'A', mcE * kcE * ELEM);
-          requestL2('B:' + bk + ':' + bj, 'B', kcE * ncE * ELEM);
-
-          for (let ir = i2; ir < i2 + mcE; ir += mr) {
-            const mrE = Math.min(mr, i2 + mcE - ir);
-            const ri = ir / mr;
-            requestL1('Ar:' + ri + ':' + bk, 'A:' + bi + ':' + bk, 'A', mrE * kcE * ELEM);
-
-            for (let jr = j2; jr < j2 + ncE; jr += nr) {
-              const nrE = Math.min(nr, j2 + ncE - jr);
-              const rj = jr / nr;
-              requestL1('Br:' + bk + ':' + rj, 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
-
-              // C 微块载入寄存器（每个 (ir,jr,k2) 一次，跨 kr 循环驻留）
-              regBytes += mrE * nrE * ELEM;
-              emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE },
-                mrE * nrE * ELEM / BW.reg);
-
-              // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）
-              for (let kr = k2; kr < k2 + kcE; kr++) {
-                const f = 2 * mrE * nrE;
-                regBytes += (mrE + nrE) * ELEM;
-                flops += f;
-                emit({
-                  type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
-                  flops: f, i2, j2, k2, regBytes: (mrE + nrE) * ELEM,
-                }, f / PEAK + (mrE + nrE) * ELEM / BW.reg);
-              }
-            }
-          }
-        }
-
-        // C 块写回
+        const { evicted, resident } = mm.insert('l2', cId, 'C', cBytes);
+        for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
+        dramRead += cBytes;
+        emit({ type: 'xfer', from: 'dram', to: 'l2', id: cId, panel: 'C', bytes: cBytes,
+          miss: true, oversize: !resident, i2, j2 }, xferTime('dram', 'l2', cBytes));
+      } else if (key === 'A') {
+        requestL2('A:' + bi + ':' + bk, 'A', mcE * kcE * ELEM);
+      } else if (key === 'B') {
+        requestL2('B:' + bk + ':' + bj, 'B', kcE * ncE * ELEM);
+      } else if (key === 'Ar') {
+        requestL1('Ar:' + (ir / mr) + ':' + bk, 'A:' + bi + ':' + bk, 'A', mrE * kcE * ELEM);
+      } else if (key === 'Br') {
+        requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
+      } else if (key === 'Reg') {
+        // C 微块载入寄存器（跨其内层的 kr 循环驻留）
+        regBytes += mrE * nrE * ELEM;
+        emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE },
+          mrE * nrE * ELEM / BW.reg);
+      } else if (key === 'MAC') {
+        // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）
+        const f = 2 * mrE * nrE;
+        regBytes += (mrE + nrE) * ELEM;
+        flops += f;
+        emit({
+          type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
+          flops: f, i2, j2, k2, regBytes: (mrE + nrE) * ELEM,
+        }, f / PEAK + (mrE + nrE) * ELEM / BW.reg);
+      } else { // Store: C 块写回
+        const cId = 'C:' + bi + ':' + bj;
+        const cBytes = mcE * ncE * ELEM;
         mm.remove('l2', cId);
         dramWrite += cBytes;
         emit({ type: 'xfer', from: 'l2', to: 'dram', id: cId, panel: 'C', bytes: cBytes, store: true, i2, j2 },
           xferTime('l2', 'dram', cBytes));
       }
+    };
+
+    function run(depth) {
+      const name = order[depth];
+      const [start, stop, step] = RANGE[name]();
+      for (let v = start; v < stop; v += step) {
+        ctx[name] = v;
+        if (name === 'i2') ctx.mcE = Math.min(mc, M - v);
+        else if (name === 'j2') ctx.ncE = Math.min(nc, N - v);
+        else if (name === 'k2') ctx.kcE = Math.min(kc, K - v);
+        else if (name === 'ir') ctx.mrE = Math.min(mr, ctx.i2 + ctx.mcE - v);
+        else if (name === 'jr') ctx.nrE = Math.min(nr, ctx.j2 + ctx.ncE - v);
+        for (const key of enter[name]) stmt(key);
+        if (name === MAC_AT) stmt('MAC');
+        if (depth + 1 < 6) run(depth + 1);
+        if (name === STORE_AT) stmt('Store');
+      }
     }
+    run(0);
 
     const computeTime = flops / PEAK;
 
@@ -305,5 +382,6 @@
     };
   }
 
-  global.MSim = { PEAK, BW, LAT, ELEM, PRESETS, normalize, randMatrix, matmulRef, buildTrace, analyze };
+  global.MSim = { PEAK, BW, LAT, ELEM, PRESETS, DEFAULT_ORDER, isLegalOrder, legalOrders,
+    normalize, randMatrix, matmulRef, buildTrace, analyze };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -133,6 +133,7 @@ class El {
   set height(v) { this._svg.__svg.h = v; }
   get height() { return this._svg ? this._svg.__svg.h : 0; }
   appendChild(c) { this.children.push(c); return c; }
+  removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); return c; }
   querySelectorAll() { return this.children.filter((c) => c.tagName === 'BUTTON'); }
   getContext() { return this._svg.getContext(); }
   getBoundingClientRect() { return { width: 1180, height: 660 }; }
@@ -142,7 +143,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
+  'selView', 'selOrder', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, new El(id.startsWith('canvas') ? 'canvas' : 'div')));
 const documentStub = {

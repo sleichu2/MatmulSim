@@ -53,6 +53,9 @@
   <label class="sep" title="L2 缓存容量">L2(KB) <input id="inL2" type="number" min="0.125" step="0.125"></label>
   <label title="L1 缓存容量">L1(KB) <input id="inL1" type="number" min="0.0625" step="0.0625"></label>
   <label class="check" title="容量随矩阵规模自动缩放"><input id="chkAutoCache" type="checkbox">自动容量</label>
+  <label title="6 层循环的嵌套顺序（外→内）。合法性：ir 在 i2 后、jr 在 j2 后、kr 在 k2 后，共 90 种">循环序
+    <select id="selOrder"></select>
+  </label>
   <label>C 视图
     <select id="selView">
       <option value="value">数值(部分和)</option>
@@ -99,7 +102,7 @@
 
 <footer>
   <div id="legend"></div>
-  <div class="tech">BLIS/Goto 风格 6 层循环 · 事件驱动回放 · float64 · 峰值 64 GFLOPS · DRAM 16 GB/s / 延迟 80ns · L2 64 GB/s / 4ns · L1 256 GB/s · 寄存器 512 GB/s · 空格=播放/暂停 · →=单步</div>
+  <div class="tech">BLIS/Goto 风格 6 层循环 · 循环序可配（90 种合法嵌套）· 事件驱动回放 · float64 · 峰值 64 GFLOPS · DRAM 16 GB/s / 延迟 80ns · L2 64 GB/s / 4ns · L1 256 GB/s · 寄存器 512 GB/s · 空格=播放/暂停 · →=单步</div>
 </footer>
 
 <script src="js/util.js"></script>

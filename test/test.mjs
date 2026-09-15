@@ -13,6 +13,7 @@
  *  7. 缓存受限(面板>L2) → 3 次超容量、8 次级联缺失、流量==强制下限
  *  8. Player 回放终态计数器与模拟器统计完全一致
  *  9. 延迟模型：记账事件零耗时、事务=带宽+固定延迟、延迟随块摊销
+ * 10. 循环顺序：90 种合法嵌套全部数值正确、非法回退、顺序改变行为
  * ============================================================ */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -224,6 +225,74 @@ console.log('=== 9. 延迟模型: 记账零耗时 / 事务=带宽+延迟 / 延�
     const blocked = perByte({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4, l2KB: 2.5, l1KB: 1 });
     check('无分块每字节 DRAM 成本 > 10\u00d7 分块 (延迟摊销效应)',
       naive > 10 * blocked, naive.toFixed(2) + ' vs ' + blocked.toFixed(2) + ' ns/B');
+  }
+}
+
+console.log('=== 10. 循环顺序: 90 种合法嵌套 / 非法回退 / 顺序改变行为 ===');
+{
+  check('合法嵌套共 90 种', MSim.legalOrders().length === 90, MSim.legalOrders().length);
+
+  // 10a. 非法顺序回退默认 + 警告
+  {
+    const n = MSim.normalize({ M: 8, N: 8, K: 8, order: ['ir', 'i2', 'j2', 'k2', 'jr', 'kr'] });
+    check('非法顺序回退默认 + 警告',
+      JSON.stringify(n.cfg.order) === JSON.stringify(MSim.DEFAULT_ORDER) && n.warnings.length > 0,
+      n.cfg.order.join(',') + ' / ' + n.warnings.length);
+  }
+
+  // 10b. 全部 90 种顺序：数值正确 + flops 一致 + C 载入/写回配对（含非整除边缘块）
+  //  注：C 载入/写回次数 = (i2,j2) 组合数 ×「夹在中间的外层循环」迭代数——
+  //  顺序不同可以合法地多于面板数（如 i2,k2,j2 下 C 被重复读写 K/kc 次），
+  //  这正是循环顺序改变局部性的体现，故断言配对不变量而非固定值。
+  {
+    const N = 12;
+    const A = MSim.randMatrix(N, N, 3), B = MSim.randMatrix(N, N, 4);
+    const refC = MSim.matmulRef(A, B, N, N, N);
+    let ok = 0, worst = 0;
+    for (const order of MSim.legalOrders()) {
+      const cfg = MSim.normalize({ M: N, N, K: N, mc: 4, nc: 4, kc: 4, mr: 2, nr: 2, order }).cfg;
+      const res = MSim.buildTrace(cfg);
+      const C = new Float64Array(N * N);
+      for (const ev of res.events) {
+        if (ev.type !== 'compute') continue;
+        for (let ii = 0; ii < ev.mr; ii++)
+          for (let jj = 0; jj < ev.nr; jj++)
+            C[(ev.i + ii) * N + ev.j + jj] += A[(ev.i + ii) * N + ev.k] * B[ev.k * N + ev.j + jj];
+      }
+      let err = 0;
+      for (let i = 0; i < C.length; i++) err = Math.max(err, Math.abs(C[i] - refC[i]));
+      worst = Math.max(worst, err);
+      const cLoads = res.events.filter((e) => e.type === 'xfer' && e.panel === 'C' && e.to === 'l2').length;
+      const cStores = res.events.filter((e) => e.type === 'xfer' && e.store).length;
+      if (err < 1e-9 && res.stats.flops === 2 * N * N * N
+        && cLoads === cStores && res.stats.dramWrite === cStores * 4 * 4 * 8) ok++;
+    }
+    check('90 种顺序全部数值正确且 C 读写配对 (最坏 |Δ|=' + worst.toExponential(1) + ')', ok === 90, ok + '/90');
+  }
+
+  // 10c. 默认顺序结构回归：事件头 + 写回位置
+  {
+    const cfg = MSim.normalize(MSim.PRESETS[0].cfg).cfg;
+    const res = MSim.buildTrace(cfg);
+    const head = res.events.slice(0, 7).map((e) => e.type).join(',');
+    check('默认顺序事件头 == xfer×5,reg,compute', head === 'xfer,xfer,xfer,xfer,xfer,reg,compute', head);
+    check('默认顺序 C 写回存在且带 (i2,j2)', res.events.some((e) =>
+      e.type === 'xfer' && e.store && e.i2 === 0 && e.j2 === 0));
+  }
+
+  // 10d. 顺序改变缓存/寄存器行为（教学对比点）
+  {
+    const run = (order) => {
+      const cfg = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4,
+        l2KB: 2.5, l1KB: 1, order }).cfg;
+      const res = MSim.buildTrace(cfg);
+      return { reg: res.stats.regBytes, flops: res.stats.flops };
+    };
+    const def = run(['i2', 'j2', 'k2', 'ir', 'jr', 'kr']);
+    const krEarly = run(['i2', 'j2', 'k2', 'kr', 'ir', 'jr']);
+    check('kr 前置 → 寄存器流量放大 ' + (krEarly.reg / def.reg).toFixed(1) + '×',
+      krEarly.reg > def.reg * 2 && krEarly.flops === def.flops,
+      krEarly.reg + ' vs ' + def.reg);
   }
 }
 

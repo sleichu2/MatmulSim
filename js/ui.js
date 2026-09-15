@@ -53,6 +53,26 @@
       $('#inL1').disabled = on;
     };
     $('#chkAutoCache').onchange = (e) => applyAutoCache(e.target.checked);
+
+    /* 循环序下拉：全部 90 种合法嵌套，常用的加注释 */
+    {
+      const NOTES = {
+        'i2,j2,k2,ir,jr,kr': 'BLIS 默认 · C 面板行优先',
+        'j2,i2,k2,jr,ir,kr': 'j2 最外 · Goto 实际面板序（B 面板驻留）',
+        'i2,k2,j2,ir,jr,kr': 'k2 提前 · 面板级 ikj',
+        'i2,j2,k2,jr,ir,kr': '微行列互换 · A/B 微面板复用对调',
+        'i2,j2,k2,ir,kr,jr': 'kr 提前 · C 微块逐 k 进出寄存器',
+        'i2,j2,k2,kr,ir,jr': 'kr 最内提前 · 寄存器流量病态对照',
+      };
+      const sel = $('#selOrder');
+      global.MSim.legalOrders().forEach((o) => {
+        const v = o.join(',');
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = o.join(' ') + (NOTES[v] ? ' — ' + NOTES[v] : '');
+        sel.appendChild(opt);
+      });
+    }
     $('#btnApply').onclick = () => cb.onApply(readConfig(), $('#chkAutoCache').checked, $('#selView').value);
     $('#btnReseed').onclick = () => cb.onReseed();
 
@@ -114,6 +134,8 @@
           inKc: cfg.kc, inMr: cfg.mr, inNr: cfg.nr, inSeed: cfg.seed,
           inL2: cfg.l2KB, inL1: cfg.l1KB };
         for (const [id, v] of Object.entries(map)) { const el = $('#' + id); if (el) el.value = v; }
+        const sel = $('#selOrder');
+        if (sel && cfg.order) sel.value = cfg.order.join(',');
       },
       setCfgNote(warnings) {
         $('#cfgNote').textContent = warnings.length ? '⚠ ' + warnings.join('；') : '';
@@ -178,6 +200,7 @@
       seed: parseInt($('inSeed').value, 10),
       l2KB: parseFloat($('inL2').value),
       l1KB: parseFloat($('inL1').value),
+      order: ($('selOrder').value || '').split(',').filter(Boolean),
     };
   }
 
