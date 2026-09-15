@@ -12,6 +12,7 @@
  *  6. 无分块(1×1 tile) → A 流量 == M·N·K（每次全量重载）
  *  7. 缓存受限(面板>L2) → 3 次超容量、8 次级联缺失、流量==强制下限
  *  8. Player 回放终态计数器与模拟器统计完全一致
+ *  9. 延迟模型：记账事件零耗时、事务=带宽+固定延迟、延迟随块摊销
  * ============================================================ */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -169,6 +170,61 @@ console.log('=== 8. Roofline 静态分析合理性 ===');
     an.naive.ai < an.cur.ai && an.cur.ai < an.ideal.ai,
     [an.naive.ai, an.cur.ai, an.ideal.ai].join(' < '));
   check('分块后速率逼近峰值(重叠执行假设)', an.cur.gf > an.naive.gf, an.cur.gf + ' vs ' + an.naive.gf);
+}
+
+console.log('=== 9. 延迟模型: 记账零耗时 / 事务=带宽+延迟 / 延迟随块摊销 ===');
+{
+  const dwellOf = (events, i, total) =>
+    (i + 1 < events.length ? events[i + 1].t : total) - events[i].t;
+
+  // 9a. 记账事件(hit/evict/oversize)不占模拟时间
+  {
+    const cfg = MSim.normalize({ M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1, l2KB: 0.125, l1KB: 0.0625 }).cfg;
+    const res = MSim.buildTrace(cfg);
+    let acct = 0;
+    for (let i = 0; i < res.events.length; i++) {
+      const e = res.events[i];
+      if (e.type === 'hit' || e.type === 'evict' || e.type === 'oversize') acct += dwellOf(res.events, i, res.stats.totalTime);
+    }
+    check('记账事件(hit/evict/oversize)耗时 == 0', acct === 0, acct + 'ns');
+  }
+
+  // 9b. 每笔事务时长 == bytes/带宽 + 固定延迟（DRAM 参与 80ns，L2→L1 4ns）
+  {
+    const cfg = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4, l2KB: 2.5, l1KB: 1 }).cfg;
+    const res = MSim.buildTrace(cfg);
+    let okDram = 0, nDram = 0, okL2 = 0, nL2 = 0, xferNs = 0;
+    for (let i = 0; i < res.events.length; i++) {
+      const e = res.events[i];
+      if (e.type !== 'xfer') continue;
+      const d = dwellOf(res.events, i, res.stats.totalTime);
+      xferNs += d;
+      if (e.from === 'dram' || e.to === 'dram') {
+        nDram++;
+        if (Math.abs(d - (e.bytes / MSim.BW.dram + MSim.LAT.dram)) < 1e-9) okDram++;
+      } else {
+        nL2++;
+        if (Math.abs(d - (e.bytes / MSim.BW.l2 + MSim.LAT.l2)) < 1e-9) okL2++;
+      }
+    }
+    check('DRAM 事务 == bytes/16B/ns + 80ns (' + okDram + '/' + nDram + ')', okDram === nDram && nDram > 0);
+    check('L2\u2192L1 事务 == bytes/64B/ns + 4ns (' + okL2 + '/' + nL2 + ')', okL2 === nL2 && nL2 > 0);
+    check('transferTime == xfer 时长累计', Math.abs(res.stats.transferTime - xferNs) < 1e-6,
+      res.stats.transferTime.toFixed(2) + ' vs ' + xferNs.toFixed(2));
+  }
+
+  // 9c. 延迟摊销：无分块(8B 事务)的每字节 DRAM 成本远高于分块(512B)
+  {
+    const perByte = (cfg0) => {
+      const cfg = MSim.normalize(cfg0).cfg;
+      const res = MSim.buildTrace(cfg);
+      return res.stats.totalTime / (res.stats.dramRead + res.stats.dramWrite);
+    };
+    const naive = perByte({ M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1, l2KB: 0.125, l1KB: 0.0625 });
+    const blocked = perByte({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4, l2KB: 2.5, l1KB: 1 });
+    check('无分块每字节 DRAM 成本 > 10\u00d7 分块 (延迟摊销效应)',
+      naive > 10 * blocked, naive.toFixed(2) + ' vs ' + blocked.toFixed(2) + ' ns/B');
+  }
 }
 
 if (failures) {

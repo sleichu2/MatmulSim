@@ -25,6 +25,7 @@
 
   const PEAK = 64;                                  // 计算峰值 64 GFLOP/s = 64 FLOP/ns (double)
   const BW = { dram: 16, l2: 64, l1: 256, reg: 512 }; // 各层带宽 bytes/ns
+  const LAT = { dram: 80, l2: 4 };                  // 事务固定延迟 ns：DRAM 参与读/写 80，L2→L1 4
   const ELEM = 8;                                   // float64 = 8 B
 
   /* ---------- 预设 ---------- */
@@ -146,7 +147,21 @@
     const mm = new MemoryModel(cfg);
     const events = [];
     let t = 0;
+    // emit(ev, durNs): durNs 是该事件的模拟时长。记账事件(hit/evict/oversize)
+    // 只记录缓存系统状态，不占用模拟时间（动画节奏由 player.dwellOf 决定，
+    // 与此处无关）——此前 0.5ns 的记账时长曾占无分块预设 59% 的 totalTime。
     const emit = (ev, durNs) => { ev.t = t; events.push(ev); t += durNs; return ev; };
+
+    /** 搬运时长 = 带宽项 + 固定延迟项。带宽按瓶颈侧计（DRAM 参与读/写
+     *  都按 DRAM 带宽）；延迟按事务类型计——块越小延迟占比越大，
+     *  「分块摊销延迟」由模型自然产生（见 README）。 */
+    let xferNs = 0;   // 全部 xfer 事件真实时长累计（含延迟）
+    const xferTime = (from, to, bytes) => {
+      const dram = from === 'dram' || to === 'dram';
+      const d = bytes / (dram ? BW.dram : BW[from]) + (dram ? LAT.dram : LAT.l2);
+      xferNs += d;
+      return d;
+    };
 
     let dramRead = 0, dramWrite = 0, l2Bytes = 0, l1Bytes = 0, regBytes = 0, flops = 0;
 
@@ -155,19 +170,19 @@
       if (mm.lookup('l2', id)) {
         mm.stats.l2.hit++;
         mm.touch('l2', id);
-        emit({ type: 'hit', level: 'l2', id }, 0.5);
+        emit({ type: 'hit', level: 'l2', id }, 0);
         return;
       }
       mm.stats.l2.miss++;
       const { evicted, resident } = mm.insert('l2', id, panel, bytes);
-      for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0.5);
+      for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
       if (!resident) {
         // 面板大于 L2 容量 → 不驻留；数据按需通过 L1 级联读取（不再整块读入，避免重复计数）
-        emit({ type: 'oversize', level: 'l2', id, bytes, miss: true }, 0.5);
+        emit({ type: 'oversize', level: 'l2', id, bytes, miss: true }, 0);
         return;
       }
       dramRead += bytes;
-      emit({ type: 'xfer', from: 'dram', to: 'l2', id, panel, bytes, miss: true }, bytes / BW.dram);
+      emit({ type: 'xfer', from: 'dram', to: 'l2', id, panel, bytes, miss: true }, xferTime('dram', 'l2', bytes));
     };
 
     /** 请求 L1 微面板（Ar/Br）；L2 缺失时级联到 DRAM */
@@ -175,22 +190,22 @@
       if (mm.lookup('l1', id)) {
         mm.stats.l1.hit++;
         mm.touch('l1', id);
-        emit({ type: 'hit', level: 'l1', id }, 0.5);
+        emit({ type: 'hit', level: 'l1', id }, 0);
         return;
       }
       mm.stats.l1.miss++;
       const { evicted, resident } = mm.insert('l1', id, panel, bytes);
-      for (const eid of evicted) emit({ type: 'evict', level: 'l1', id: eid }, 0.5);
-      if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes }, 0.5);
+      for (const eid of evicted) emit({ type: 'evict', level: 'l1', id: eid }, 0);
+      if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes }, 0);
       if (mm.lookup('l2', tileId)) {
         l2Bytes += bytes;
-        emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, bytes / BW.l2);
+        emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
       } else {
         // 级联缺失：L2 中无对应面板（容量不足/被淘汰）→ 直接访问 DRAM
         mm.stats.l2.miss++;
         dramRead += bytes;
         emit({ type: 'xfer', from: 'dram', to: 'l1', id, panel, bytes, miss: true, cascade: true },
-          bytes / BW.dram);
+          xferTime('dram', 'l1', bytes));
       }
     };
 
@@ -207,10 +222,10 @@
         mm.stats.l2.miss++; // 首触必缺
         {
           const { evicted, resident } = mm.insert('l2', cId, 'C', cBytes);
-          for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0.5);
+          for (const eid of evicted) emit({ type: 'evict', level: 'l2', id: eid }, 0);
           dramRead += cBytes;
           emit({ type: 'xfer', from: 'dram', to: 'l2', id: cId, panel: 'C', bytes: cBytes,
-            miss: true, oversize: !resident, i2, j2 }, cBytes / BW.dram);
+            miss: true, oversize: !resident, i2, j2 }, xferTime('dram', 'l2', cBytes));
         }
 
         for (let k2 = 0; k2 < K; k2 += kc) {
@@ -252,12 +267,10 @@
         mm.remove('l2', cId);
         dramWrite += cBytes;
         emit({ type: 'xfer', from: 'l2', to: 'dram', id: cId, panel: 'C', bytes: cBytes, store: true, i2, j2 },
-          cBytes / BW.dram);
+          xferTime('l2', 'dram', cBytes));
       }
     }
 
-    const transferTime = dramRead / BW.dram + dramWrite / BW.dram + l2Bytes / BW.l2
-      + l1Bytes / BW.l1 + regBytes / BW.reg;
     const computeTime = flops / PEAK;
 
     return {
@@ -265,7 +278,7 @@
       stats: {
         l2: mm.stats.l2, l1: mm.stats.l1,
         flops, dramRead, dramWrite, l2Bytes, l1Bytes: regBytes, regBytes,
-        computeTime, transferTime, totalTime: t,
+        computeTime, transferTime: xferNs, totalTime: t,
         ai: flops / Math.max(1, dramRead + dramWrite),   // 算术强度 FLOP/B
         achieved: flops / Math.max(1, t),                // GFLOPS（串行回放）
       },
@@ -292,5 +305,5 @@
     };
   }
 
-  global.MSim = { PEAK, BW, ELEM, PRESETS, normalize, randMatrix, matmulRef, buildTrace, analyze };
+  global.MSim = { PEAK, BW, LAT, ELEM, PRESETS, normalize, randMatrix, matmulRef, buildTrace, analyze };
 })(typeof window !== 'undefined' ? window : globalThis);
