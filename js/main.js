@@ -20,6 +20,8 @@
     viewMode: 'value',
     autoCache: true,
   };
+  let hudLastMs = -1e9;   // HUD/统计 DOM 上次刷新时刻（节流）
+  let endFlushed = false; // 回放结束时已强制刷新过统计
 
   /* ---------- 视图 ---------- */
   const mainView = new MMainView($('canvasMain'));
@@ -76,6 +78,7 @@
     ui.setRooflineNote(rooflineText(n.cfg));
     state.playing = false;
     ui.setPlaying(false, false);
+    endFlushed = false;
   }
 
   function rooflineText(cfg) {
@@ -89,6 +92,7 @@
     state.player.reset();
     memView.clear();
     codeView.reset();
+    endFlushed = false;
   }
 
   /* ---------- UI 回调 ---------- */
@@ -102,16 +106,19 @@
       resetAll();
       state.playing = false;
       ui.setPlaying(false, false);
+      updateHud(true);
     },
     onSeekEnd() {
       state.player.seekEnd(onEv);
       state.playing = false;
       ui.setPlaying(false, true);
+      updateHud(true);
     },
     onStep(mode) {
       state.playing = false;
       ui.setPlaying(false, state.player.isEnd);
       state.player.step(mode, onEv);
+      updateHud(true);
     },
     onSpeed(v) { state.speed = v; },
     onPreset(id) {
@@ -159,7 +166,14 @@
     }
   }
 
-  function updateHud() {
+  /** HUD/统计/进度条 DOM 刷新。
+   *  节流到 ≥100ms 一次：这批 textContent/style 写入每帧都会弄脏
+   *  header 与统计面板的布局，是稳态帧预算与 GC 压力的主要来源；
+   *  10Hz 对人眼足够流畅（进度条自带 width 过渡补间）。
+   *  force=true 时立即刷新（用户操作、回放结束）。 */
+  function updateHud(force) {
+    if (!force && performance.now() - hudLastMs < 100) return;
+    hudLastMs = performance.now();
     const pl = state.player;
     let s = '';
     if (pl.cur) s = 'i2=' + pl.cur.i2 + ' j2=' + pl.cur.j2 + ' k2=' + pl.cur.k2
@@ -191,7 +205,12 @@
     codeView.draw();
     roofline.draw(state.cfg, state.analysis,
       state.player.flops > 0 ? { ai: state.player.liveAI, gf: state.player.liveGF } : null);
-    updateHud();
+    if (state.player.isEnd && !endFlushed) {
+      endFlushed = true;
+      updateHud(true);
+    } else {
+      updateHud();
+    }
     requestAnimationFrame(frame);
   }
 
@@ -231,6 +250,7 @@
       state.playing = false;
       ui.setPlaying(false, state.player.isEnd);
       state.player.step($('#selStep').value, onEv);
+      updateHud(true);
     }
   });
 

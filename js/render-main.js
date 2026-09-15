@@ -143,9 +143,10 @@
         pl.dirty.length = 0;
       } else if (pl.dirty.length) {
         const x = this.layers.C.x;
-        for (let d = 0; d < pl.dirty.length; d++) {
-          const ri = pl.dirty[d][0], ci = pl.dirty[d][1];
-          this.paintCell(x, ri, ci, pl.C[ri * this.cfg.N + ci], pl.heat[ri * this.cfg.N + ci]);
+        const N = this.cfg.N;
+        for (let d = 0; d < pl.dirty.length; d += 2) {
+          const ri = pl.dirty[d], ci = pl.dirty[d + 1];
+          this.paintCell(x, ri, ci, pl.C[ri * N + ci], pl.heat[ri * N + ci]);
         }
         pl.dirty.length = 0;
       }

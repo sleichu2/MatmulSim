@@ -48,7 +48,9 @@
       this.maxErr = null; this.errDone = false;
       this.lastEv = null;
       this.isEnd = this.events.length === 0;
-      this.dirty = [];          // 需要重绘的 C 单元格 [ri, ci]
+      this.dirty = [];          // 需要重绘的 C 单元格 [ri, ci]（平铺: ri,ci,ri,ci…）
+      this.dirtyCap = 2 * this.M * this.N; // 平铺上限（格数=M·N）；超出改走全量重绘
+      this.credit = 0;          // 回放时间信用（见 advance）
       this.fullRepaint = true;
     }
 
@@ -84,7 +86,9 @@
               const ci = ai * this.N + j + jj;
               this.C[ci] += aVal * this.B[k * this.N + j + jj];
               this.heat[ci]++;
-              if (this.dirty.length < 4096) this.dirty.push([ai, j + jj]);
+              // 平铺存 (ri,ci)：避免每个 MAC 分配小数组（GC 压力）；
+              // 超过一格全矩阵量则改走一次全量重绘（seekEnd 场景）
+              if (this.dirty.length < this.dirtyCap) this.dirty.push(ai, j + jj);
               else this.fullRepaint = true;
               if (this.heat[ci] === this.K && this.refC) {
                 const e = Math.abs(this.C[ci] - this.refC[ci]);
@@ -127,21 +131,27 @@
       if (this.cursor >= this.events.length) this.isEnd = true;
     }
 
-    /** 按真实帧时间推进回放；返回处理的事件数 */
+    /** 按真实帧时间推进回放；返回处理的事件数
+     *
+     * 预算用「信用累积」模型：帧时间不足一个事件的 dwell 时，余量留到
+     * 下一帧继续攒；每帧最多入账 34ms（约 2 个 vsync）——偶发的主线程
+     * 停顿（GC/浏览器内部任务）之后平滑追赶，而不是单帧一口气吞下
+     * 100ms×speed 的事件量造成第二次可见卡顿。顺带修复慢速档
+     * （如 0.25× 时 dwell 64ms > 单帧 16.7ms）回放冻结的问题。 */
     advance(dtMs, speed, onEvent) {
       if (this.isEnd) return 0;
-      let budget = dtMs;
+      this.credit = Math.min(this.credit + Math.min(dtMs, 34), 250);
       let n = 0;
       const t0 = (global.performance && performance.now) ? performance.now() : Date.now();
-      while (!this.isEnd && budget > 0) {
+      while (!this.isEnd && this.credit > 0) {
         const ev = this.events[this.cursor];
         const dwell = Math.max(1, this.dwellOf(ev) / speed);
-        if (dwell > budget) break;
-        budget -= dwell;
+        if (dwell > this.credit) break;
+        this.credit -= dwell;
         this.processEvent(ev);
         if (onEvent) onEvent(ev, dwell);
         n++;
-        if (n % 64 === 0 && ((global.performance && performance.now) ? performance.now() : Date.now()) - t0 > 12) break;
+        if ((n & 15) === 0 && ((global.performance && performance.now) ? performance.now() : Date.now()) - t0 > 8) break;
       }
       return n;
     }

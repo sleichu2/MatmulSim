@@ -47,6 +47,7 @@
       this.rows = [];
       this.st = this.freshState();
       this.sig = null;
+      this.activeRow = 0;   // 当前高亮行（1 基，0=无）
       this.build();
     }
 
@@ -250,26 +251,45 @@
       return { v: s.kr, x: s.kr - s.k2 + 1, y: depth };
     }
 
-    /* 应用到 DOM（状态签名未变则跳过，避免每帧重写） */
+    /* 应用到 DOM：事件签名未变则跳过；行内再做逐节点 diff，
+     * 高亮只碰上一行/当前行两行，chip 只写值变化的节点——
+     * 避免每个事件重写 14 行 className 造成整面板样式失效 */
     draw() {
       const s = this.st;
-      const sig = s.line + '|' + s.tag.text + '|' + s.i2 + ',' + s.j2 + ','
+      const sig = s.line + '|' + s.tag.text + '|' + s.tag.cls + '|' + s.i2 + ',' + s.j2 + ','
         + s.k2 + ',' + s.ir + ',' + s.jr + ',' + s.kr;
       if (sig === this.sig) return;
       this.sig = sig;
+      if (this.activeRow !== s.line) {
+        if (this.activeRow) {
+          const r = this.rows[this.activeRow - 1];
+          r.el.className = 'cl cl-' + r.kind;
+          if (r.tag) r.tag.textContent = '';
+        }
+        if (s.line) {
+          const r = this.rows[s.line - 1];
+          r.el.className = 'cl cl-' + r.kind + ' active';
+        }
+        this.activeRow = s.line;
+      }
+      if (s.line) {
+        const r = this.rows[s.line - 1];
+        if (r.tag) {
+          if (r.tag.textContent !== s.tag.text) r.tag.textContent = s.tag.text;
+          const cls = 'cl-tag' + (s.tag.cls ? ' ' + s.tag.cls : '');
+          if (r.tag.className !== cls) r.tag.className = cls;
+        }
+      }
       for (let i = 0; i < this.rows.length; i++) {
         const r = this.rows[i];
-        const active = s.line === i + 1;
-        r.el.className = 'cl cl-' + r.kind + (active ? ' active' : '');
-        if (r.kind === 'loop') {
-          const info = this.loopInfo(r.varName);
-          r.val.textContent = r.varName + '=' + (info ? info.v : '—');
-          r.cnt.textContent = info ? info.x + '/' + info.y : '';
-          r.bar.style.width = info ? Math.round(100 * info.x / info.y) + '%' : '0%';
-        } else {
-          r.tag.textContent = active ? s.tag.text : '';
-          r.tag.className = 'cl-tag' + (active ? ' ' + s.tag.cls : '');
-        }
+        if (r.kind !== 'loop') continue;
+        const info = this.loopInfo(r.varName);
+        const val = r.varName + '=' + (info ? info.v : '—');
+        const cnt = info ? info.x + '/' + info.y : '';
+        const w = info ? Math.round(100 * info.x / info.y) + '%' : '0%';
+        if (r.val.textContent !== val) r.val.textContent = val;
+        if (r.cnt.textContent !== cnt) r.cnt.textContent = cnt;
+        if (r.bar.style.width !== w) r.bar.style.width = w;
       }
     }
   }
