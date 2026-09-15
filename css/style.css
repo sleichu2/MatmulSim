@@ -93,36 +93,47 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
 }
 #progressText { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; white-space: nowrap; }
 
-/* ---------- 参数面板 ---------- */
+/* ---------- 参数条（常驻） ---------- */
 #configPanel {
-  position: fixed;
-  top: 56px;
-  right: 14px;
-  z-index: 20;
-  width: 320px;
-  background: #121a24;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-  box-shadow: 0 12px 32px rgba(0,0,0,.5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #0d1219, #10161f);
 }
-#configPanel.hidden { display: none; }
-.cfg-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-.cfg-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
-.cfg-grid label.sep { border-left: 1px dashed var(--border); padding-left: 8px; }
-.cfg-grid label.wide { grid-column: span 2; flex-direction: row; align-items: center; gap: 8px; }
-.cfg-grid label.check { grid-column: span 3; flex-direction: row; align-items: center; gap: 6px; }
-.cfg-grid input {
+#configPanel label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#configPanel label.sep { border-left: 1px dashed var(--border); padding-left: 12px; }
+#configPanel input[type=number] {
+  width: 58px;
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 6px;
-  padding: 4px 6px;
+  padding: 3px 6px;
   font-size: 12px;
   font-family: ui-monospace, monospace;
-  width: 100%;
 }
-.cfg-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#configPanel input[type=number]:focus { border-color: var(--accent); outline: none; }
+#configPanel input[type=checkbox] { accent-color: var(--accent); }
+#configPanel select {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+#configPanel label:has(input:disabled), #configPanel label:has(select:disabled) { opacity: .5; }
+.cfg-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .cfg-actions button {
   background: var(--panel2);
   border: 1px solid var(--border);
@@ -132,8 +143,9 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
   font-size: 12px;
   cursor: pointer;
 }
+.cfg-actions button:hover { border-color: var(--accent); }
 .cfg-actions button.primary { background: #12324d; border-color: #1d4e79; }
-#cfgNote { font-size: 11px; color: var(--amber); flex: 1; min-width: 120px; }
+#cfgNote { font-size: 11px; color: var(--amber); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 主区布局 ---------- */
 main {

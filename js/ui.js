@@ -47,8 +47,7 @@
       cb.onSpeed(v);
     };
 
-    /* ---------- 参数面板 ---------- */
-    $('#btnConfig').onclick = () => $('#configPanel').classList.toggle('hidden');
+    /* ---------- 参数条（常驻） ---------- */
     $('#chkAutoCache').onchange = (e) => {
       $('#inL2').disabled = e.target.checked;
       $('#inL1').disabled = e.target.checked;

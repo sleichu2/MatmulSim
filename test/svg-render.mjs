@@ -140,7 +140,7 @@ class El {
 const STATIC_IDS = [
   'canvasMain', 'canvasMem', 'canvasTimeline', 'canvasRoofline', 'mainView', 'mainHud',
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
-  'btnConfig', 'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
+  'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
   'selView', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];

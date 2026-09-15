@@ -32,7 +32,6 @@
       <input type="range" id="rngSpeed" min="0.25" max="20" step="0.25" value="1">
       <b id="lblSpeed">1.0×</b>
     </label>
-    <button id="btnConfig">⚙ 参数</button>
   </div>
 
   <div class="progress">
@@ -41,33 +40,31 @@
   </div>
 </header>
 
-<div id="configPanel" class="hidden">
-  <div class="cfg-grid">
-    <label>M <input id="inM" type="number" min="1" max="256" step="1"></label>
-    <label>N <input id="inN" type="number" min="1" max="256" step="1"></label>
-    <label>K <input id="inK" type="number" min="1" max="256" step="1"></label>
-    <label class="sep">mc <input id="inMc" type="number" min="1" step="1"></label>
-    <label>nc <input id="inNc" type="number" min="1" step="1"></label>
-    <label>kc <input id="inKc" type="number" min="1" step="1"></label>
-    <label>mr <input id="inMr" type="number" min="1" step="1"></label>
-    <label>nr <input id="inNr" type="number" min="1" step="1"></label>
-    <label>随机种子 <input id="inSeed" type="number" step="1"></label>
-    <label>L2 容量(KB) <input id="inL2" type="number" min="0.125" step="0.125"></label>
-    <label>L1 容量(KB) <input id="inL1" type="number" min="0.0625" step="0.0625"></label>
-    <label class="check wide"><input id="chkAutoCache" type="checkbox">自动缓存容量(随规模缩放)</label>
-    <label class="wide">C 视图
-      <select id="selView">
-        <option value="value">数值(部分和)</option>
-        <option value="heat">访问热度</option>
-      </select>
-    </label>
-  </div>
+<section id="configPanel" title="参数配置">
+  <label>M <input id="inM" type="number" min="1" max="256" step="1"></label>
+  <label>N <input id="inN" type="number" min="1" max="256" step="1"></label>
+  <label>K <input id="inK" type="number" min="1" max="256" step="1"></label>
+  <label class="sep" title="C 行块：L2 级面板为 mc×nc，A 面板为 mc×kc">mc <input id="inMc" type="number" min="1" step="1"></label>
+  <label title="C 列块：L2 级面板为 mc×nc，B 面板为 kc×nc">nc <input id="inNc" type="number" min="1" step="1"></label>
+  <label title="k 分块：A 面板(mc×kc) 与 B 面板(kc×nc) 共用同一 kc——收缩维必须对齐，无需按矩阵分开">kc <input id="inKc" type="number" min="1" step="1"></label>
+  <label class="sep" title="微内核 A 微面板行数（寄存器级 mr×nr）">mr <input id="inMr" type="number" min="1" step="1"></label>
+  <label title="微内核 B 微面板列数（寄存器级 mr×nr）">nr <input id="inNr" type="number" min="1" step="1"></label>
+  <label class="sep">种子 <input id="inSeed" type="number" step="1"></label>
+  <label class="sep" title="L2 缓存容量">L2(KB) <input id="inL2" type="number" min="0.125" step="0.125"></label>
+  <label title="L1 缓存容量">L1(KB) <input id="inL1" type="number" min="0.0625" step="0.0625"></label>
+  <label class="check" title="容量随矩阵规模自动缩放"><input id="chkAutoCache" type="checkbox">自动容量</label>
+  <label>C 视图
+    <select id="selView">
+      <option value="value">数值(部分和)</option>
+      <option value="heat">访问热度</option>
+    </select>
+  </label>
   <div class="cfg-actions">
     <button id="btnApply" class="primary">应用配置</button>
     <button id="btnReseed">重新生成数据</button>
     <span id="cfgNote"></span>
   </div>
-</div>
+</section>
 
 <main>
   <section id="mainView">
