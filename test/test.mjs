@@ -345,11 +345,11 @@ console.log('=== 12. 写路径与链路统计: 脏替换 / 配平 / 实测带宽
       L['dram>l2'].bw > 0 && L['dram>l2'].bw < 16, L['dram>l2'].bw.toFixed(2));
   }
 
-  // 12c. 脏替换：L2 装不下 C+A+B 共存 → C 中途脏替换冲刷，最终写回跳过，
-  //      每 C 面板恰好写回一次（总写 == M·N·8 不变）
+  // 12c. 脏替换：L2 连 C+A+B 都装不下 → C 载入后被挤出（脏替换冲刷），
+  //      最终写回跳过，每 C 面板恰好写回一次（总写 == M·N·8 不变）
   {
     const cfg = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4,
-      l2KB: 1.5, l1KB: 1 }).cfg;
+      l2KB: 1.25, l1KB: 1 }).cfg;
     const res = MSim.buildTrace(cfg);
     const dirtyEv = res.events.filter((e) => e.type === 'xfer' && e.dirty);
     check('脏替换写回事件存在且全为 C 面板',
@@ -357,13 +357,17 @@ console.log('=== 12. 写路径与链路统计: 脏替换 / 配平 / 实测带宽
       dirtyEv.length);
     check('总写 == M\u00b7N\u00b78 (每面板恰写一次)', res.stats.dramWrite === 16 * 16 * 8,
       res.stats.dramWrite);
-    check('默认无分块: C 块全部走脏替换 (淘汰即冲刷)', (() => {
+    check('无分块: C 块无重复写回（脏替换/最终写回恰好各一次）', (() => {
       const cfgN = MSim.normalize({ M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1,
         l2KB: 0.125, l1KB: 0.0625 }).cfg;
       const resN = MSim.buildTrace(cfgN);
-      const dirtyN = resN.events.filter((e) => e.type === 'xfer' && e.dirty).length;
-      const finalN = resN.events.filter((e) => e.type === 'xfer' && e.store && !e.dirty).length;
-      return dirtyN === 256 && finalN === 0 && resN.stats.dramWrite === 16 * 16 * 8;
+      const writes = {};
+      for (const e of resN.events) {
+        if (e.type === 'xfer' && e.store) writes[e.id] = (writes[e.id] || 0) + 1;
+      }
+      const ids = Object.keys(writes);
+      return ids.length === 256 && ids.every((id) => writes[id] === 1)
+        && resN.stats.dramWrite === 16 * 16 * 8;
     })());
   }
 

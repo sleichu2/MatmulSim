@@ -5,20 +5,17 @@
   'use strict';
   const U = global.MUtil;
 
-  const STAT_ROWS = [
-    ['进度', 'stProg', false],
-    ['循环位置', 'stLoop', false],
-    ['计算量', 'stFlops', false],
-    ['DRAM 搬运', 'stDram', false],
-    ['L2→L1', 'stL2', false],
-    ['L1→寄存器', 'stL1', false],
-    ['算术强度', 'stAi', false],
-    ['实际速率', 'stGf', false],
-    ['L2 缓存', 'stL2c', true],
-    ['L1 缓存', 'stL1c', true],
-    ['面板复用', 'stReuse', false],
-    ['理论流量', 'stFml', true],
-    ['数值校验', 'stErr', true],
+  /* 统计面板：分组单列。id 与 dom-smoke 断言耦合，勿随意改名 */
+  const STAT_SECTIONS = [
+    { title: '计算', rows: [['FLOPs', 'stFlops'], ['实测速率', 'stGf']] },
+    { title: '访存', rows: [
+      ['DRAM 读/写', 'stDram'],
+      ['L2 命中/未中', 'stL2h'],
+      ['L2 淘汰/超容', 'stL2c'],
+      ['L1 命中/未中', 'stL1c'],
+      ['算术强度', 'stAi'],
+    ] },
+    { title: '正确性', rows: [['数值校验', 'stErr', true]] },
   ];
 
   function initUI(cb) {
@@ -102,16 +99,22 @@
 
     /* ---------- 统计面板 ---------- */
     const sb = $('#statsBody');
-    STAT_ROWS.forEach(([label, id, wide]) => {
-      const d = document.createElement('div');
-      d.className = 'stat' + (wide ? ' wide' : '');
-      const s = document.createElement('span');
-      s.textContent = label;
-      const b = document.createElement('b');
-      b.id = id;
-      b.textContent = '—';
-      d.appendChild(s); d.appendChild(b);
-      sb.appendChild(d);
+    STAT_SECTIONS.forEach((sec) => {
+      const h = document.createElement('div');
+      h.className = 'stat-sec';
+      h.textContent = sec.title;
+      sb.appendChild(h);
+      sec.rows.forEach(([label, id]) => {
+        const d = document.createElement('div');
+        d.className = 'stat';
+        const s = document.createElement('span');
+        s.textContent = label;
+        const b = document.createElement('b');
+        b.id = id;
+        b.textContent = '—';
+        d.appendChild(s); d.appendChild(b);
+        sb.appendChild(d);
+      });
     });
 
     return {
@@ -148,35 +151,19 @@
       setRooflineNote(text) { $('#rooflineNote').textContent = text; },
       setStats(s) {
         const $b = (id) => $('#' + id);
-        const pl = s.player, st = s.result.stats, cfg = s.cfg;
-        const an = s.analysis;
-        $b('stProg').textContent = (pl.progress * 100).toFixed(1) + '% · 事件 ' + pl.cursor + '/' + pl.events.length;
-        if (pl.cur) {
-          $b('stLoop').textContent = 'i2=' + pl.cur.i2 + ' j2=' + pl.cur.j2 + ' k2=' + pl.cur.k2
-            + ' · ir=' + pl.cur.i + ' jr=' + pl.cur.j + ' · k=' + pl.cur.k;
-        } else {
-          $b('stLoop').textContent = '未开始';
-        }
-        $b('stFlops').textContent = U.fmt(pl.flops, 1) + ' / ' + U.fmt(st.flops, 1) + ' FLOP';
-        $b('stDram').textContent = '读 ' + U.fmtBytes(pl.dramR) + ' · 写 ' + U.fmtBytes(pl.dramW);
-        $b('stL2').textContent = U.fmtBytes(pl.l2B) + ' / ' + U.fmtBytes(st.l2Bytes);
-        $b('stL1').textContent = U.fmtBytes(pl.regB) + ' / ' + U.fmtBytes(st.regBytes);
+        const pl = s.player, st = s.result.stats;
+        $b('stFlops').textContent = U.fmt(pl.flops, 1) + ' / ' + U.fmt(st.flops, 1);
+        $b('stGf').textContent = (pl.flops > 0 ? pl.liveGF.toFixed(1) : '0.0') + ' / ' + global.MSim.PEAK;
+        $b('stDram').textContent = U.fmtBytes(pl.dramR) + ' / ' + U.fmtBytes(pl.dramW);
+        $b('stL2h').textContent = pl.l2Hit + ' / ' + pl.l2Miss;
+        $b('stL2c').textContent = pl.evicts + ' / ' + pl.oversize;
+        $b('stL1c').textContent = pl.l1Hit + ' / ' + pl.l1Miss;
         $b('stAi').textContent = pl.flops > 0 ? pl.liveAI.toFixed(2) + ' FLOP/B' : '—';
-        $b('stGf').textContent = (pl.flops > 0 ? pl.liveGF.toFixed(1) : '0.0') + ' / ' + global.MSim.PEAK + ' GFLOPS';
-        $b('stL2c').textContent = '命中 ' + pl.l2Hit + ' · 未中 ' + pl.l2Miss
-          + ' · 淘汰 ' + pl.evicts + ' · 超容量 ' + pl.oversize;
-        $b('stL1c').textContent = '命中 ' + pl.l1Hit + ' · 未中 ' + pl.l1Miss;
-        const reuseA = cfg.N / cfg.nc, reuseB = cfg.M / cfg.mc;
-        $b('stReuse').textContent = 'A ×' + reuseA.toFixed(1) + ' · B ×' + reuseB.toFixed(1)
-          + '  (理论 N/nc, M/mc)';
-        if (an) {
-          $b('stFml').textContent = an.formula + ' = ' + U.fmtBytes(an.cur.bytes);
-        }
         if (!pl.errDone) {
           $b('stErr').textContent = '计算中…';
           $b('stErr').className = '';
         } else if (pl.isEnd) {
-          $b('stErr').textContent = '✓ 与朴素乘法一致 (max |Δ| = ' + pl.maxErr.toExponential(1) + ')';
+          $b('stErr').textContent = '✓ max |Δ| = ' + pl.maxErr.toExponential(1);
           $b('stErr').className = 'ok';
         } else {
           $b('stErr').textContent = '已收敛格 max |Δ| = ' + pl.maxErr.toExponential(1);

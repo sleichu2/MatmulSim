@@ -183,7 +183,7 @@ press(tightBtn);
 frame(16);
 press(byId.get('btnEnd'));
 frame(16);
-check('缓存受限: 超容量 3', byId.get('stL2c').textContent.indexOf('超容量 3') >= 0,
+check('缓存受限: 超容量 3', byId.get('stL2c').textContent.split('/')[1].trim() === '3',
   byId.get('stL2c').textContent);
 
 /* 配置面板：改尺寸并应用 */
@@ -214,10 +214,10 @@ press(byId.get('btnEnd'));
 frame(16);
 check('自动容量运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,
   byId.get('progressText').textContent);
-check('自动容量无超容量', byId.get('stL2c').textContent.indexOf('超容量 0') >= 0,
+check('自动容量无超容量', byId.get('stL2c').textContent.split('/')[1].trim() === '0',
   byId.get('stL2c').textContent);
 const l1cAuto = byId.get('stL1c').textContent;
-check('自动容量 L1 有命中(不乒乓)', /命中 (\d+)/.exec(l1cAuto) && parseInt(/命中 (\d+)/.exec(l1cAuto)[1], 10) > 0, l1cAuto);
+check('自动容量 L1 有命中(不乒乓)', /^\d+/.exec(l1cAuto) && parseInt(/^\d+/.exec(l1cAuto)[0], 10) > 0, l1cAuto);
 byId.get('chkAutoCache').checked = false;
 
 /* 预设切换关闭自动容量（预设自带容量） */

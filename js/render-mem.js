@@ -51,7 +51,7 @@
         this.flash.push({ level: 'dram', good: true, label: ev.to === 'l2' ? '读' : '级联读', t0: now, dur: 320 });
       } else if (ev.type === 'xfer' && ev.to === 'dram') {
         this.lastDramFlash = now;
-        this.flash.push({ level: 'dram', good: true, label: '写回', t0: now, dur: 320 });
+        this.flash.push({ level: 'dram', good: true, label: ev.dirty ? '脏替换' : '写回', t0: now, dur: 320 });
       } else if (ev.type === 'xfer' && ev.miss) {
         this.flash.push({ level: ev.to, good: false, label: '未命中', t0: now, dur: 400 });
       } else if (ev.type === 'xfer' && ev.oversize) {
@@ -125,7 +125,8 @@
           ctx.fillStyle = '#0b0f14';
           ctx.font = '8px ui-monospace, monospace';
           ctx.textAlign = 'left';
-          ctx.fillText(String(b.panel), bx + 3, y + 19);
+          // C 块为脏块（写分配），标 ✱ 提示其淘汰会产生写回流量
+          ctx.fillText(String(b.panel) + (b.panel === 'C' ? ' ✱' : ''), bx + 3, y + 19);
         }
         bx += slot + 2;
       }

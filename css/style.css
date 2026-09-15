@@ -200,11 +200,30 @@ aside { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflo
 #rooflineNote { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
 
 /* ---------- 统计 ---------- */
-#statsBody { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
-.stat { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 12px; border-bottom: 1px dashed #1c242e; }
+#statsBody { display: flex; flex-direction: column; }
+.stat-sec {
+  margin: 7px 0 1px;
+  font-size: 9px;
+  color: #5b6675;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+}
+.stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed #1c242e;
+}
 .stat span { color: var(--muted); }
-.stat b { font-family: ui-monospace, monospace; font-weight: 600; text-align: right; }
-.stat.wide { grid-column: span 2; }
+.stat b {
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  text-align: right;
+  color: var(--text);
+}
 .stat b.ok { color: var(--green); }
 .stat b.warn { color: var(--amber); }
 

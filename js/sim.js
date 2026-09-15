@@ -290,6 +290,9 @@
           xferTime('dram', 'l1', bytes));
         return;
       }
+      // L2 命中供数：必须 touch L2 面板（正在被使用的面板保持 LRU 新鲜度，
+      // 否则会被后续面板分配挤出，产生多余的脏替换与重读）
+      mm.touch('l2', tileId);
       l2Bytes += bytes;
       emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
     };
@@ -352,9 +355,12 @@
         requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
       } else if (key === 'Reg') {
         // C 微块载入寄存器：物理上是 L2 读（带宽与延迟按 L2 链路计），
-        // 跨其内层的 kr 循环驻留；寄存器写回即最终的 C 写路径
+        // 跨其内层的 kr 循环驻留；寄存器写回即最终的 C 写路径。
+        // 同时 touch L2 上的 C 面板——活跃累加中的面板保持 LRU 新鲜度，
+        // 否则会被 A/B 面板换代挤出（产生多余的脏替换写回）
         const bytes = mrE * nrE * ELEM;
         regBytes += bytes;
+        mm.touch('l2', 'C:' + bi + ':' + bj);
         const d = bytes / BW.l2 + LAT.l2;
         linkAdd('l2>reg', bytes, d);
         emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes }, d);
