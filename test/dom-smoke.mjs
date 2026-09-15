@@ -193,6 +193,39 @@ frame(16);
 check('自定义配置应用无异常', errs.length === 0, errs[0]);
 check('配置回填 M=24', String(byId.get('inM').value) === '24');
 
+/* 自动容量：按面板工作集给容量，L1 不得乒乓（Ar+Br 装得下） */
+byId.get('chkAutoCache').checked = true;
+byId.get('inM').value = '16';
+byId.get('inN').value = '16';
+byId.get('inK').value = '16';
+byId.get('inMc').value = '8';
+byId.get('inNc').value = '8';
+byId.get('inKc').value = '8';
+byId.get('inMr').value = '4';
+byId.get('inNr').value = '4';
+press(byId.get('btnApply'));
+frame(16);
+check('自动容量应用无异常', errs.length === 0, errs[0]);
+check('自动容量 L2 回填 2.5KB', String(byId.get('inL2').value) === '2.5', byId.get('inL2').value);
+check('自动容量 L1 回填 1KB', String(byId.get('inL1').value) === '1', byId.get('inL1').value);
+press(byId.get('btnEnd'));
+frame(16);
+check('自动容量运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,
+  byId.get('progressText').textContent);
+check('自动容量无超容量', byId.get('stL2c').textContent.indexOf('超容量 0') >= 0,
+  byId.get('stL2c').textContent);
+const l1cAuto = byId.get('stL1c').textContent;
+check('自动容量 L1 有命中(不乒乓)', /命中 (\d+)/.exec(l1cAuto) && parseInt(/命中 (\d+)/.exec(l1cAuto)[1], 10) > 0, l1cAuto);
+byId.get('chkAutoCache').checked = false;
+
+/* 预设切换关闭自动容量（预设自带容量） */
+byId.get('chkAutoCache').checked = true;
+const tightBtn2 = byId.get('presetBar').children.find((c) => c.dataset.id === 'tight');
+press(tightBtn2);
+frame(16);
+check('预设切换后自动容量被关闭', byId.get('chkAutoCache').checked === false);
+check('预设自带容量不被覆盖', String(byId.get('inL2').value) === '1', byId.get('inL2').value);
+
 /* 热度视图切换 */
 byId.get('selView').value = 'heat';
 press(byId.get('btnApply'));

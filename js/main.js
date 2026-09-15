@@ -36,11 +36,17 @@
     codeView.onEvent(ev);
   };
 
-  /** 自动缓存容量启发式：L2 ≈ 工作集的 40%，L1 ≈ L2 的 18%（演示缩放，见 README） */
+  /** 自动缓存容量：按 tile 面板工作集推容量（与预设出厂值同源）
+   *  L2 = C 面板 + 两代 A/B 面板——C 需常驻整个 j2 循环，A/B 每 k2
+   *  换代一次，LRU 下最坏共存 C+2A+2B；对 16³/32³/96³ 预设精确复现
+   *  出厂值 2.5/10/40KB。
+   *  L1 = Ar 微面板 + 整排 Br 微面板（跨 ir 复用是 L1 层的核心演示）
+   *  再留 25% 余量；下限对齐 normalize 的字节地板(128/64B)。 */
   function heuristicCache(cfg) {
-    const l2KB = Math.round(U.clamp(0.4 * (cfg.M * cfg.K + cfg.K * cfg.N) * 8 / 1024, 0.5, 4096) * 4) / 4;
-    const l1KB = Math.round(U.clamp(l2KB * 0.18, 0.25, 1024) * 4) / 4;
-    return { l2KB, l1KB };
+    const q = (kb, minKB) => Math.max(minKB, Math.round(kb * 4) / 4);
+    const l2Need = (cfg.mc * cfg.nc + 2 * cfg.mc * cfg.kc + 2 * cfg.kc * cfg.nc) * MSim.ELEM;
+    const l1Need = (cfg.mr * cfg.kc + cfg.kc * cfg.nc) * MSim.ELEM * 1.25;
+    return { l2KB: q(l2Need / 1024, 0.125), l1KB: q(l1Need / 1024, 0.0625) };
   }
 
   function build(rawCfg, opts) {
@@ -128,6 +134,8 @@
       const rng = $('#rngSpeed');
       rng.value = p.speed;
       $('#lblSpeed').textContent = p.speed.toFixed(1) + '×';
+      // 预设自带缓存容量（「缓存受限」等演示依赖具体值），自动容量须让位
+      ui.setAutoCache(false);
       build({ ...p.cfg, seed: state.cfg ? state.cfg.seed : 1 }, { autoCache: false });
       ui.setPresetActive(id);
     },

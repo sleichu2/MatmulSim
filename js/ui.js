@@ -48,10 +48,11 @@
     };
 
     /* ---------- 参数条（常驻） ---------- */
-    $('#chkAutoCache').onchange = (e) => {
-      $('#inL2').disabled = e.target.checked;
-      $('#inL1').disabled = e.target.checked;
+    const applyAutoCache = (on) => {
+      $('#inL2').disabled = on;
+      $('#inL1').disabled = on;
     };
+    $('#chkAutoCache').onchange = (e) => applyAutoCache(e.target.checked);
     $('#btnApply').onclick = () => cb.onApply(readConfig(), $('#chkAutoCache').checked, $('#selView').value);
     $('#btnReseed').onclick = () => cb.onReseed();
 
@@ -101,6 +102,12 @@
       setPresetActive(id) {
         presetBar.querySelectorAll('.preset-btn').forEach((b) =>
           b.classList.toggle('active', b.dataset.id === id));
+      },
+      /** 同步「自动容量」勾选态（预设自带容量，切换预设时需关闭） */
+      setAutoCache(on) {
+        const chk = $('#chkAutoCache');
+        chk.checked = on;
+        applyAutoCache(on);
       },
       fillConfigInputs(cfg) {
         const map = { inM: cfg.M, inN: cfg.N, inK: cfg.K, inMc: cfg.mc, inNc: cfg.nc,
