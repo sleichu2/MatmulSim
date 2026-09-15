@@ -247,6 +247,17 @@ press(byId.get('btnApply'));
 frame(16);
 check('恢复默认循环序无异常', errs.length === 0, errs[0]);
 
+/* 超大预设：256³ 构建 + 跑到结束 */
+const hugeBtn = byId.get('presetBar').children.find((c) => c.dataset.id === 'huge');
+press(hugeBtn);
+frame(16);
+press(byId.get('btnEnd'));
+frame(16);
+check('超大 256³ 运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,
+  byId.get('progressText').textContent);
+check('超大 256³ 数值校验', byId.get('stErr').textContent.indexOf('✓') === 0,
+  byId.get('stErr').textContent);
+
 /* 热度视图切换 */
 byId.get('selView').value = 'heat';
 press(byId.get('btnApply'));

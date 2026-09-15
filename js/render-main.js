@@ -70,8 +70,10 @@
       const { M, N, K } = this.cfg;
       const gap = 18, mx = 14, my = 14;
       const W = this.w, H = this.h;
+      // 大矩阵允许亚像素单元格（最低 0.4px），保证始终完整装进画布；
+      // p < 4 时静态层走 ImageData 快速路径（见 paintMatrixFast）
       let p = Math.min((W - 2 * mx - gap) / (K + N), (H - 2 * my - gap) / (K + M));
-      p = Math.max(2, Math.min(40, Math.floor(p * 100) / 100));
+      p = Math.max(0.4, Math.min(40, Math.floor(p * 100) / 100));
       const aW = K * p, aH = M * p, bW = N * p, bH = K * p, cW = N * p, cH = M * p;
       const bX = mx + aW + gap, bY = my;
       const cX = bX, cY = bY + bH + gap;
@@ -82,26 +84,23 @@
     rebuild() {
       if (!this.cfg || !this.player || !this.w) return;
       this.computeLayout();
-      const { M, N, K, mc, nc, kc } = this.cfg;
+      const { M, N, K } = this.cfg;
       const L = this.L, p = L.p;
       const A = makeLayer(L.aW, L.aH, this.dpr);
       const B = makeLayer(L.bW, L.bH, this.dpr);
       const C = makeLayer(L.cW, L.cH, this.dpr);
       const G = makeLayer(this.w, this.h, this.dpr);
 
-      for (let ri = 0; ri < M; ri++)
-        for (let ci = 0; ci < K; ci++)
-          paintValueCell(A.x, ci * p, ri * p, p, this.player.A[ri * K + ci]);
-      for (let ri = 0; ri < K; ri++)
-        for (let ci = 0; ci < N; ci++)
-          paintValueCell(B.x, ci * p, ri * p, p, this.player.B[ri * N + ci]);
-      for (let ri = 0; ri < M; ri++)
-        for (let ci = 0; ci < N; ci++)
-          this.paintCell(C.x, ri, ci, 0, 0);
+      const colorA = (ri, ci) => this.player.A[ri * K + ci];
+      const colorB = (ri, ci) => this.player.B[ri * N + ci];
+      const zeros = () => 0;
+      this.paintMatrixValues(A.x, M, K, p, colorA);
+      this.paintMatrixValues(B.x, K, N, p, colorB);
+      this.paintMatrixValues(C.x, M, N, p, zeros);
 
-      gridLines(G.x, L.aX, L.aY, K, M, kc, mc, p);
-      gridLines(G.x, L.bX, L.bY, N, K, nc, kc, p);
-      gridLines(G.x, L.cX, L.cY, N, M, nc, mc, p);
+      gridLines(G.x, L.aX, L.aY, K, M, this.cfg.kc, this.cfg.mc, p);
+      gridLines(G.x, L.bX, L.bY, N, K, this.cfg.nc, this.cfg.kc, p);
+      gridLines(G.x, L.cX, L.cY, N, M, this.cfg.nc, this.cfg.mc, p);
       G.x.font = '10px -apple-system, "PingFang SC", sans-serif';
       G.x.textBaseline = 'bottom';
       G.x.fillStyle = '#8b98a9';
@@ -111,6 +110,94 @@
       this.layers = { A, B, C, G };
       this.player.fullRepaint = true;
       this.player.dirty.length = 0;
+    }
+
+    /** 数值模式矩阵层：单元格 ≥3px 逐格 fillRect(大格附数值文本)；
+     *  更小（大矩阵缩到亚像素）时改为 1px/格 ImageData + 一次缩放
+     *  blit——几十万格从秒级降到毫秒级；无 ImageData 环境自动回退。 */
+    paintMatrixValues(ctx, rows, cols, p, valueOf) {
+      if (p >= 3) {
+        for (let ri = 0; ri < rows; ri++)
+          for (let ci = 0; ci < cols; ci++)
+            paintValueCell(ctx, ci * p, ri * p, p, valueOf(ri, ci));
+        return;
+      }
+      let img = null;
+      try {
+        const tiny = document.createElement('canvas');
+        tiny.width = cols;
+        tiny.height = rows;
+        const tctx = tiny.getContext('2d');
+        img = tctx.createImageData(cols, rows);
+        if (img && img.data) {
+          const data = img.data;
+          let o = 0;
+          for (let ri = 0; ri < rows; ri++) {
+            for (let ci = 0; ci < cols; ci++) {
+              const c = U.valueRGB(valueOf(ri, ci));
+              data[o++] = c[0];
+              data[o++] = c[1];
+              data[o++] = c[2];
+              data[o++] = 255;
+            }
+          }
+          tctx.putImageData(img, 0, 0);
+          ctx.imageSmoothingEnabled = false;
+          ctx.clearRect(0, 0, cols * p, rows * p);
+          ctx.drawImage(tiny, 0, 0, cols, rows, 0, 0, cols * p, rows * p);
+          return;
+        }
+      } catch (e) { img = null; }
+      for (let ri = 0; ri < rows; ri++) {
+        for (let ci = 0; ci < cols; ci++) {
+          ctx.fillStyle = U.valueColor(valueOf(ri, ci));
+          ctx.fillRect(ci * p, ri * p, p, p);
+        }
+      }
+    }
+
+    /** 热度模式 C 全量重绘（同上按像素密度分流） */
+    paintMatrixHeat(ctx, rows, cols, p, heat, K) {
+      if (p >= 3) {
+        ctx.fillStyle = U.heatColor(0);
+        for (let ri = 0; ri < rows; ri++) {
+          for (let ci = 0; ci < cols; ci++) {
+            const f = heat[ri * cols + ci] / K;
+            if (f > 0) ctx.fillStyle = U.heatColor(f);
+            ctx.fillRect(ci * p, ri * p, p, p);
+          }
+        }
+        return;
+      }
+      let img = null;
+      try {
+        const tiny = document.createElement('canvas');
+        tiny.width = cols;
+        tiny.height = rows;
+        const tctx = tiny.getContext('2d');
+        img = tctx.createImageData(cols, rows);
+        if (img && img.data) {
+          const data = img.data;
+          let o = 0;
+          for (let i = 0; i < rows * cols; i++) {
+            const c = U.heatRGB(heat[i] / K);
+            data[o++] = c[0];
+            data[o++] = c[1];
+            data[o++] = c[2];
+            data[o++] = 255;
+          }
+          tctx.putImageData(img, 0, 0);
+          ctx.imageSmoothingEnabled = false;
+          ctx.clearRect(0, 0, cols * p, rows * p);
+          ctx.drawImage(tiny, 0, 0, cols, rows, 0, 0, cols * p, rows * p);
+          return;
+        }
+      } catch (e) { img = null; }
+      for (let i = 0; i < rows * cols; i++) {
+        const ri = (i / cols) | 0, ci = i % cols;
+        ctx.fillStyle = U.heatColor(heat[i] / K);
+        ctx.fillRect(ci * p, ri * p, p, p);
+      }
     }
 
     paintCell(ctx, ri, ci, v, h) {
@@ -127,10 +214,12 @@
     }
 
     fullRepaintC() {
+      const { M, N, K } = this.cfg;
+      const pl = this.player;
       const ctx = this.layers.C.x;
-      for (let ri = 0; ri < this.cfg.M; ri++)
-        for (let ci = 0; ci < this.cfg.N; ci++)
-          this.paintCell(ctx, ri, ci, this.player.C[ri * this.cfg.N + ci], this.player.heat[ri * this.cfg.N + ci]);
+      const p = this.L.p;
+      if (this.viewMode === 'heat') this.paintMatrixHeat(ctx, M, N, p, pl.heat, K);
+      else this.paintMatrixValues(ctx, M, N, p, (ri, ci) => pl.C[ri * N + ci]);
     }
 
     render(now) {
@@ -362,13 +451,18 @@
     ctx.strokeStyle = 'rgba(148,163,184,0.13)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let c = colStep; c < cols; c += colStep) {
-      ctx.moveTo(x0 + c * p + 0.5, y0);
-      ctx.lineTo(x0 + c * p + 0.5, y0 + rows * p);
+    // 大矩阵下 tile 间隔缩到 3px 以内时跳过次级网格线，避免糊成噪点
+    if (colStep * p >= 3) {
+      for (let c = colStep; c < cols; c += colStep) {
+        ctx.moveTo(x0 + c * p + 0.5, y0);
+        ctx.lineTo(x0 + c * p + 0.5, y0 + rows * p);
+      }
     }
-    for (let r = rowStep; r < rows; r += rowStep) {
-      ctx.moveTo(x0, y0 + r * p + 0.5);
-      ctx.lineTo(x0 + cols * p, y0 + r * p + 0.5);
+    if (rowStep * p >= 3) {
+      for (let r = rowStep; r < rows; r += rowStep) {
+        ctx.moveTo(x0, y0 + r * p + 0.5);
+        ctx.lineTo(x0 + cols * p, y0 + r * p + 0.5);
+      }
     }
     ctx.stroke();
     ctx.strokeStyle = 'rgba(148,163,184,0.5)';

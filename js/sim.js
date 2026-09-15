@@ -71,6 +71,8 @@
       cfg: { M: 32, N: 32, K: 32, mc: 16, nc: 16, kc: 16, mr: 4, nr: 4, l2KB: 10, l1KB: 3 } },
     { id: 'large', name: '大型 · 性能', note: '96³ · 接近真实规模', speed: 10,
       cfg: { M: 96, N: 96, K: 96, mc: 32, nc: 32, kc: 32, mr: 8, nr: 8, l2KB: 40, l1KB: 12 } },
+    { id: 'huge', name: '超大 · 256³', note: '256³ · 面板带宽瓶颈主导', speed: 20,
+      cfg: { M: 256, N: 256, K: 256, mc: 64, nc: 64, kc: 64, mr: 8, nr: 8, l2KB: 160, l1KB: 45 } },
     { id: 'naive', name: '无分块 · 对照', note: 'mc=nc=kc=1 · 每元素全量搬运(最坏 2MNK)', speed: 10,
       cfg: { M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1, l2KB: 0.125, l1KB: 0.0625 } },
     { id: 'tight', name: '缓存受限', note: '面板超出 L2 容量 → 级联缺失', speed: 1,
@@ -98,6 +100,12 @@
     if (c.M % c.mc) warnings.push('M 不被 mc 整除，存在边缘块');
     if (c.N % c.nc) warnings.push('N 不被 nc 整除，存在边缘块');
     if (c.K % c.kc) warnings.push('K 不被 kc 整除，存在边缘块');
+
+    // 事件轨迹规模预警：compute 事件数 ≈ M·N·K/(mr·nr)
+    const macs = c.M * c.N * c.K / (c.mr * c.nr);
+    if (macs > 3e6) {
+      warnings.push('事件轨迹约 ' + Math.round(macs / 1e6) + 'M 条：构建与回放将明显变慢、内存占用高（建议增大 mr/nr 或 kc）');
+    }
 
     if (!Array.isArray(c.order)) c.order = DEFAULT_ORDER.slice();
     if (!isLegalOrder(c.order)) {

@@ -41,9 +41,9 @@
 </header>
 
 <section id="configPanel" title="参数配置">
-  <label>M <input id="inM" type="number" min="1" max="256" step="1"></label>
-  <label>N <input id="inN" type="number" min="1" max="256" step="1"></label>
-  <label>K <input id="inK" type="number" min="1" max="256" step="1"></label>
+  <label>M <input id="inM" type="number" min="1" max="512" step="1"></label>
+  <label>N <input id="inN" type="number" min="1" max="512" step="1"></label>
+  <label>K <input id="inK" type="number" min="1" max="512" step="1"></label>
   <label class="sep" title="C 行块：L2 级面板为 mc×nc，A 面板为 mc×kc">mc <input id="inMc" type="number" min="1" step="1"></label>
   <label title="C 列块：L2 级面板为 mc×nc，B 面板为 kc×nc">nc <input id="inNc" type="number" min="1" step="1"></label>
   <label title="k 分块：A 面板(mc×kc) 与 B 面板(kc×nc) 共用同一 kc——收缩维必须对齐，无需按矩阵分开">kc <input id="inKc" type="number" min="1" step="1"></label>

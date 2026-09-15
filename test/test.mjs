@@ -14,6 +14,7 @@
  *  8. Player 回放终态计数器与模拟器统计完全一致
  *  9. 延迟模型：记账事件零耗时、事务=带宽+固定延迟、延迟随块摊销
  * 10. 循环顺序：90 种合法嵌套全部数值正确、非法回退、顺序改变行为
+ * 11. 超大矩阵：256³ 预设流量界、事件量预警
  * ============================================================ */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -294,6 +295,25 @@ console.log('=== 10. 循环顺序: 90 种合法嵌套 / 非法回退 / 顺序改
       krEarly.reg > def.reg * 2 && krEarly.flops === def.flops,
       krEarly.reg + ' vs ' + def.reg);
   }
+}
+
+console.log('=== 11. 超大矩阵 ===');
+{
+  const huge = MSim.PRESETS.find((x) => x.id === 'huge');
+  check('存在 256³ 超大预设', !!huge && huge.cfg.M === 256);
+  const cfg = MSim.normalize(huge.cfg).cfg;
+  const res = MSim.buildTrace(cfg);
+  check('超大 256³ flops == 2\u00b7N\u00b3', res.stats.flops === 2 * 256 ** 3, res.stats.flops);
+  const els = (res.stats.dramRead + res.stats.dramWrite) / 8;
+  const lo = 2 * 256 * 256 + 256 * 256 + 256 * 256;
+  const hi = 256 ** 3 * (1 / 64 + 1 / 64) + 2 * 256 * 256;
+  check('超大 256\u00b3 DRAM 流量 \u2208 [下限, 公式]', els >= lo && els <= hi,
+    els + ' \u2208 [' + lo + ', ' + hi + ']');
+  check('超大事件量预警 (512\u00b3 无分块触发)',
+    MSim.normalize({ M: 512, N: 512, K: 512, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1 })
+      .warnings.some((w) => w.indexOf('事件轨迹') === 0));
+  check('正常规模无预警', MSim.normalize({ M: 96, N: 96, K: 96, mc: 32, nc: 32, kc: 32, mr: 8, nr: 8 })
+    .warnings.length === 0);
 }
 
 if (failures) {

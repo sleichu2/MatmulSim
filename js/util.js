@@ -23,20 +23,20 @@
   }
   function css(c) { return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; }
 
-  /** 数值 → 发散色（负=蓝，正=橙，0=深底），用于矩阵单元格 */
-  function valueColor(v) {
+  /** 数值 → 发散色 RGB（负=蓝，正=橙，0=深底），用于矩阵单元格 */
+  function valueRGB(v) {
     const t = clamp(Math.abs(v), 0, 1);
-    const pos = [249, 115, 22], neg = [56, 189, 248], base = [18, 24, 34];
-    return css(lerpRGB(base, v >= 0 ? pos : neg, 0.12 + 0.88 * t));
+    return lerpRGB([18, 24, 34], v >= 0 ? [249, 115, 22] : [56, 189, 248], 0.12 + 0.88 * t);
   }
-
   const HEAT_STOPS = [[14, 26, 43], [29, 78, 216], [34, 211, 238], [250, 204, 21], [239, 68, 68]];
-  /** 热度 0..1 → 冷→热色（近似 viridis） */
-  function heatColor(f) {
+  /** 热度 0..1 → 冷→热 RGB（近似 viridis） */
+  function heatRGB(f) {
     f = clamp(f, 0, 1) * (HEAT_STOPS.length - 1);
     const i = Math.min(HEAT_STOPS.length - 2, Math.floor(f));
-    return css(lerpRGB(HEAT_STOPS[i], HEAT_STOPS[i + 1], f - i));
+    return lerpRGB(HEAT_STOPS[i], HEAT_STOPS[i + 1], f - i);
   }
+  function valueColor(v) { return css(valueRGB(v)); }
+  function heatColor(f) { return css(heatRGB(f)); }
 
   /** 数字缩写（K/M/G） */
   function fmt(n, d) {
@@ -59,5 +59,5 @@
     return ns.toFixed(0) + 'ns';
   }
 
-  global.MUtil = { mulberry32, clamp, lerp, lerpRGB, css, valueColor, heatColor, fmt, fmtBytes, fmtNs };
+  global.MUtil = { mulberry32, clamp, lerp, lerpRGB, css, valueRGB, heatRGB, valueColor, heatColor, fmt, fmtBytes, fmtNs };
 })(typeof window !== 'undefined' ? window : globalThis);
