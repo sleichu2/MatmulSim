@@ -44,6 +44,9 @@
           id: ev.id, panel: ev.panel, from: ev.from, to: ev.to,
           t0: now, dur: U.clamp(dwellMs, 90, 520), bytes: ev.bytes,
           cascade: !!ev.cascade,
+          // 并行切分下飞入 L1 的面板按 block 着色——私有归属一眼可辨
+          bc: (ev.to === 'l1' && ev.b !== undefined && (this.nBlocks || 1) > 1)
+            ? U.BLOCK_COLORS[ev.b % U.BLOCK_COLORS.length] : null,
         });
         if (this.anims.length > 12) this.anims.shift();
       } else if (ev.type === 'xfer' && ev.from === 'dram') {
@@ -95,7 +98,9 @@
       // ---------- L2 / L1 ----------
       this.drawCacheRow(ctx, 'l2', player, cfg.l2Bytes, labelW, contentX, contentW, y + rowH + gap, rowH);
       const nL1 = ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1)) || 1;
-      this.drawCacheRow(ctx, 'l1', player, cfg.l1Bytes * nL1, labelW, contentX, contentW, y + 2 * (rowH + gap), rowH);
+      const l1y = y + 2 * (rowH + gap);
+      if (nL1 > 1) this.drawL1RowParallel(ctx, player, cfg, contentX, contentW, l1y, rowH, nL1);
+      else this.drawCacheRow(ctx, 'l1', player, cfg.l1Bytes, labelW, contentX, contentW, l1y, rowH);
 
       // ---------- 寄存器 ----------
       const ry = y + 3 * (rowH + gap);
@@ -164,6 +169,71 @@
       if (level === 'l2') ctx.fillText('淘汰' + player.evicts + ' 超容量' + player.oversize, contentX + 90, y + rowH - 12);
     }
 
+    /** L1 行（并行切分）：n 个物理隔开的隔间，每个 block 一格私有缓存。
+     *  隔间 = block 色描边 + 驻留面板条 + 独立容量条 + 独立命中统计，
+     *  互不连通 —— 「独享 L1」的语义直接来自视觉上的物理分隔。 */
+    drawL1RowParallel(ctx, player, cfg, contentX, contentW, y, rowH, nL1) {
+      rowBg(ctx, 0, y, this.w, rowH);
+      rowTitle(ctx, 6, y + 4, 'L1 ×' + nL1,
+        '每 block 独享 ' + U.fmtBytes(cfg.l1Bytes) + '（合计 ' + U.fmtBytes(cfg.l1Bytes * nL1) + '）',
+        rowH, this.w);
+      const groups = [];
+      for (let i = 0; i < nL1; i++) groups.push([]);
+      for (const b of player.memL1.values()) {
+        const idx = b.b === undefined ? 0 : Math.min(nL1 - 1, b.b);
+        groups[idx].push(b);
+      }
+      const cw = (contentW - (nL1 - 1) * 4) / nL1;
+      const chipH = Math.min(14, rowH - 30);
+      for (let i = 0; i < nL1; i++) {
+        const x0 = contentX + i * (cw + 4);
+        const c = U.BLOCK_COLORS[i % U.BLOCK_COLORS.length];
+        // 隔间底色与描边（block 色）
+        ctx.fillStyle = c + '0d';
+        ctx.fillRect(x0, y + 6, cw, rowH - 13);
+        ctx.strokeStyle = c + '70';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0 + 0.5, y + 6.5, cw - 1, rowH - 14);
+        ctx.fillStyle = c;
+        ctx.font = 'bold 8px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('B' + i + (cw >= 46 ? ' 私有' : ''), x0 + 3, y + 16);
+        // 该 block 私有 L1 的驻留面板
+        const items = groups[i];
+        let bx = x0 + 2;
+        const slot = items.length ? U.clamp((cw - 6) / items.length, 3, 44) : 0;
+        for (let k = 0; k < items.length && bx < x0 + cw - 3; k++) {
+          const it = items[k];
+          ctx.fillStyle = PANEL_COLORS[it.panel] || '#8b98a9';
+          ctx.fillRect(bx, y + 20, Math.min(slot, x0 + cw - 3 - bx), chipH);
+          if (slot >= 22 && chipH >= 11) {
+            ctx.fillStyle = '#0b0f14';
+            ctx.font = '7.5px ui-monospace, monospace';
+            ctx.fillText(String(it.panel) + (it.panel === 'C' ? '✱' : ''), bx + 2, y + 20 + chipH - 3);
+          }
+          bx += slot + 1.5;
+        }
+        if (!items.length) {
+          ctx.fillStyle = 'rgba(139,152,169,0.3)';
+          ctx.font = '8px -apple-system, sans-serif';
+          ctx.fillText('（空）', x0 + 3, y + 30);
+        }
+        // 独立容量条
+        let tot = 0;
+        for (const it of items) tot += it.bytes;
+        const frac = U.clamp(tot / cfg.l1Bytes, 0, 1);
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(x0 + 2, y + rowH - 11, cw - 4, 3);
+        ctx.fillStyle = frac < 0.7 ? '#3fb950' : frac < 0.95 ? '#f0883e' : '#f85149';
+        ctx.fillRect(x0 + 2, y + rowH - 11, (cw - 4) * frac, 3);
+        // 独立命中统计
+        const h = player.l1HitBy[i] || 0, m = player.l1MissBy[i] || 0;
+        ctx.fillStyle = '#5b6675';
+        ctx.font = '7.5px ui-monospace, monospace';
+        ctx.fillText('命中' + h + ' 未中' + m, x0 + 2, y + rowH - 4);
+      }
+    }
+
     drawRegs(ctx, player, contentX, ry, contentW, rowH) {
       const cur = player.cur;
       const regC = player.regC;
@@ -198,7 +268,7 @@
         const y2 = this.rowCenter(a.to, rowH, gap);
         const yy = U.lerp(y1, y2, t);
         const xx = labelW + 10 + (a.id.length * 7) % Math.max(40, this.w - labelW - 80);
-        const color = a.cascade ? '#f85149' : (PANEL_COLORS[a.panel] || '#8b98a9');
+        const color = a.bc || (a.cascade ? '#f85149' : (PANEL_COLORS[a.panel] || '#8b98a9'));
         ctx.globalAlpha = 0.95 * (t < 0.15 ? t / 0.15 : 1) * (t > 0.85 ? (1 - t) / 0.15 : 1);
         ctx.fillStyle = color;
         ctx.fillRect(xx, yy - 6, 26, 12);

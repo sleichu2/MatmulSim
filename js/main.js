@@ -74,6 +74,7 @@
     mainView.bind(state.player, n.cfg);
     mainView.setViewMode(state.viewMode);
     memView.clear();
+    memView.nBlocks = ((n.cfg.biBlocks || 1) * (n.cfg.bjBlocks || 1)) || 1;
     timeline.bind(state.player);
     codeView.setConfig(n.cfg);
 
@@ -167,7 +168,12 @@
         if (ev.oversize) s += ' ⚠ 超出容量不驻留';
         return s;
       }
-      case 'hit': return '缓存命中  ' + ev.level.toUpperCase() + '  ' + ev.id;
+      case 'hit': {
+        let s = '缓存命中  ' + ev.level.toUpperCase() + '  ' + ev.id;
+        if (ev.level === 'l1' && ev.b !== undefined && state.cfg
+          && ((state.cfg.biBlocks || 1) * (state.cfg.bjBlocks || 1)) > 1) s += '  [B' + ev.b + ' 私有]';
+        return s;
+      }
       case 'evict': return 'LRU 淘汰  ' + ev.level.toUpperCase() + '  ' + ev.id;
       case 'oversize': return '⚠ 块 ' + ev.id + ' 大于 ' + ev.level.toUpperCase() + ' 容量 → 无法驻留';
       case 'reg': return '载入寄存器  C 微块 ' + ev.rows + '×' + ev.cols;

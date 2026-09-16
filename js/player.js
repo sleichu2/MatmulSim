@@ -43,10 +43,14 @@
       this.heat = new Float64Array(this.M * this.N); // 每格 MAC 次数
       this.cur = null;        // 最近一次 compute 事件（当前微内核位置）
       this.regC = null;       // 最近一次寄存器 C 微块载入
+      this.curByBlock = [];   // 各 block 的 compute 位置（并行可视化：同时绘制）
+      this.regCByBlock = [];  // 各 block 的寄存器 C 微块
       this.memL2 = new Map(); // 驻留镜像: id -> {panel, bytes}
       this.memL1 = new Map();
       this.dramR = 0; this.dramW = 0; this.l2B = 0; this.regB = 0; this.flops = 0;
       this.l2Hit = 0; this.l2Miss = 0; this.l1Hit = 0; this.l1Miss = 0;
+      this.l1HitBy = [];      // 各 block 的 L1 命中/未中（独享缓存分格统计）
+      this.l1MissBy = [];
       this.evicts = 0; this.oversize = 0;
       this.maxErr = null; this.errDone = false;
       this.lastEv = null;
@@ -90,6 +94,7 @@
         case 'compute': {
           const { i, j, k, mr, nr } = ev;
           this.cur = ev;
+          this.curByBlock[ev.b || 0] = ev;
           for (let ii = 0; ii < mr; ii++) {
             const ai = i + ii;
             const aVal = this.A[ai * this.K + k];
@@ -114,7 +119,7 @@
           break;
         }
         case 'reg':
-          if (ev.panel === 'C') this.regC = ev;
+          if (ev.panel === 'C') { this.regC = ev; this.regCByBlock[ev.b || 0] = ev; }
           this.regB += ev.bytes;
           this.linkAdd('l2>reg', ev.bytes, ev.bytes / BW.l2 + LAT.l2);
           break;
@@ -122,7 +127,11 @@
           if (ev.from === 'dram') this.dramR += ev.bytes;
           if (ev.from === 'l2' && ev.to === 'dram') { this.dramW += ev.bytes; this.memL2.delete(ev.id); }
           if (ev.to === 'l2' && !ev.oversize) this.memL2.set(ev.id, { panel: ev.panel, bytes: ev.bytes });
-          if (ev.to === 'l1') { this.memL1.set(ev.id, { panel: ev.panel, bytes: ev.bytes, b: ev.b }); this.l1Miss++; }
+          if (ev.to === 'l1') {
+            this.memL1.set(ev.id, { panel: ev.panel, bytes: ev.bytes, b: ev.b });
+            this.l1Miss++;
+            this.l1MissBy[ev.b || 0] = (this.l1MissBy[ev.b || 0] || 0) + 1;
+          }
           if (ev.from === 'l2' && ev.to === 'l1') this.l2B += ev.bytes;
           if (ev.from === 'dram' && ev.to === 'l2' && ev.miss) this.l2Miss++;
           if (ev.from === 'dram' && ev.to === 'l1') this.l2Miss++; // 级联缺失计为 L2 未命中
@@ -134,7 +143,8 @@
           break;
         }
         case 'hit':
-          if (ev.level === 'l2') this.l2Hit++; else this.l1Hit++;
+          if (ev.level === 'l2') this.l2Hit++;
+          else { this.l1Hit++; this.l1HitBy[ev.b || 0] = (this.l1HitBy[ev.b || 0] || 0) + 1; }
           break;
         case 'evict':
           this.evicts++;

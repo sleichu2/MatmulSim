@@ -188,7 +188,9 @@ function svgOf(id) {
   return s;
 }
 const dump = (name) => {
-  writeFileSync(join(shotsDir, name + '.svg'), svgOf(name === 'main' ? 'canvasMain' : name === 'mem' ? 'canvasMem' : name === 'timeline' ? 'canvasTimeline' : 'canvasRoofline'));
+  const id = name === 'main' ? 'canvasMain' : name === 'mem' ? 'canvasMem'
+    : name === 'timeline' ? 'canvasTimeline' : name === 'hier' ? 'canvasHier' : 'canvasRoofline';
+  writeFileSync(join(shotsDir, name + '.svg'), svgOf(id));
 };
 
 /* ---------- 场景 ---------- */
@@ -234,6 +236,17 @@ frame(16);
 writeFileSync(join(shotsDir, '06-large.svg'), svgOf('canvasMain'));
 writeFileSync(join(shotsDir, '06-large-mem.svg'), svgOf('canvasMem'));
 writeFileSync(join(shotsDir, '06-large-roofline.svg'), svgOf('canvasRoofline'));
+
+// 并行切分 2×2：多 block 同屏（主画布 L2 级齐动 + L1 独享隔间 + 框图分格）
+byId.get('selBI2').value = '2';
+byId.get('selBJ2').value = '2';
+byId.get('btnApply').onclick();
+frame(16);
+byId.get('btnPlay').onclick();
+for (let i = 0; i < 60; i++) frame(50);
+writeFileSync(join(shotsDir, '07-parallel.svg'), svgOf('canvasMain'));
+writeFileSync(join(shotsDir, '07-parallel-mem.svg'), svgOf('canvasMem'));
+writeFileSync(join(shotsDir, '07-parallel-hier.svg'), svgOf('canvasHier'));
 
 console.log('SVG 快照已输出到 ' + shotsDir);
 console.log('转 PNG:  qlmanage -t -s 2048 -o ' + shotsDir + ' ' + join(shotsDir, '02-playing.svg'));

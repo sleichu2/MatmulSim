@@ -81,7 +81,39 @@
       const pl = player || { l1Hit: 0, l1Miss: 0, l2Hit: 0, l2Miss: 0, dramR: 0, dramW: 0 };
       const nB = ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1)) || 1;
       boxText('reg', ['REG · 寄存器', '累加与操作数']);
-      boxText('l1', ['L1 ×' + nB + '（独享）', '容量 ' + U.fmtBytes(cfg.l1Bytes * nB), '命中率 ' + hitPct(pl.l1Hit, pl.l1Miss)]);
+      if (nB > 1) {
+        /* L1 独享语义：盒体按 block 分隔成 n 个彩色小格——每块一块物理缓存 */
+        const b = BOX.l1;
+        const iw = b.w - 6, ix = cx - iw / 2, iy = b.y + 15, ih = 14;
+        const step = iw / nB, segW = Math.max(1, step - 0.8);
+        for (let i = 0; i < nB; i++) {
+          const c = U.BLOCK_COLORS[i % U.BLOCK_COLORS.length];
+          const sx = ix + i * step;
+          ctx.fillStyle = c + (nB > 16 ? '99' : '16');
+          ctx.fillRect(sx, iy, segW, ih);
+          if (nB <= 16) {
+            ctx.strokeStyle = c + '77';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(sx + 0.5, iy + 0.5, segW - 1, ih - 1);
+          }
+          if (step >= 11) {
+            ctx.fillStyle = c;
+            ctx.font = 'bold 7.5px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('B' + i, sx + segW / 2, iy + ih / 2 + 2.5);
+          }
+        }
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#dbe4ee';
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillText('L1 ×' + nB + '（每 block 独享）', cx, b.y + 11);
+        ctx.fillStyle = '#5b6675';
+        ctx.font = '7.5px -apple-system, sans-serif';
+        ctx.fillText(U.fmtBytes(cfg.l1Bytes) + '/块 · 合 ' + U.fmtBytes(cfg.l1Bytes * nB)
+          + ' · 命中率 ' + hitPct(pl.l1Hit, pl.l1Miss), cx, b.y + bh - 2.5);
+      } else {
+        boxText('l1', ['L1 · ' + U.fmtBytes(cfg.l1Bytes), '命中率 ' + hitPct(pl.l1Hit, pl.l1Miss)]);
+      }
       boxText('l2', ['L2 · ' + U.fmtBytes(cfg.l2Bytes), '命中率 ' + hitPct(pl.l2Hit, pl.l2Miss)]);
       boxText('dram', ['DRAM · 主存', '读 ' + U.fmtBytes(pl.dramR) + ' · 写 ' + U.fmtBytes(pl.dramW)]);
 

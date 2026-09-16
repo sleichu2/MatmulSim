@@ -71,9 +71,10 @@
         opt.textContent = o.join(' ') + (NOTES[v] ? ' — ' + NOTES[v] : '');
         sel.appendChild(opt);
       });
-      // 并行切分下拉
+      // 并行切分下拉（清空静态 option 后填充，避免重复项）
       for (const id of ['selBI2', 'selBJ2']) {
         const s = $('#' + id);
+        s.innerHTML = '';
         ['1', '2', '4', '8'].forEach((v) => {
           const o = document.createElement('option');
           o.value = v; o.textContent = v;

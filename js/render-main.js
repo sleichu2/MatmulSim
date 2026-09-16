@@ -247,8 +247,23 @@
       ctx.drawImage(this.layers.B.c, L.bX, L.bY, L.bW, L.bH);
       ctx.drawImage(this.layers.C.c, L.cX, L.cY, L.cW, L.cH);
       ctx.drawImage(this.layers.G.c, 0, 0, this.w, this.h);
-      // 3) 动态覆盖
-      if (pl.cur) this.drawHighlights(ctx, pl.cur, now);
+      // 3) 动态覆盖。多 block 并行时分层降噪：
+      //    L2 级（领地 + C 面板呼吸发光 + A/B 读取窗细框）所有 block 常显 → 看「齐动」；
+      //    L1 级细节（微面板 / kr 亮线 / 数据流箭头）只画焦点 block（最近一次 compute），
+      //    否则几组微面板与箭头互相叠画必然混乱。
+      const nBlocks = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
+      if (nBlocks > 1) {
+        this.drawBlockRegions(ctx);
+        const focusB = pl.cur ? (pl.cur.b || 0) : -1;
+        for (let b = 0; b < nBlocks; b++) {
+          if (b === focusB) continue;
+          const cur = pl.curByBlock[b];
+          if (cur) this.drawBlockPanel(ctx, cur, now);
+        }
+        if (pl.cur) this.drawHighlights(ctx, pl.cur, now, false);
+      } else if (pl.cur) {
+        this.drawHighlights(ctx, pl.cur, now, true);
+      }
       this.drawInset(ctx, now);
       // 4) 初始提示
       if (pl.cursor === 0) {
@@ -261,41 +276,67 @@
       }
     }
 
-    /* ---------- 动态高亮 ---------- */
-    drawHighlights(ctx, cur, now) {
+    /* ---------- 并行模式：非焦点 block 的 L2 级活跃指示 ----------
+     * C 面板呼吸发光（相位错开，多块同屏可见各自推进）+
+     * 共享 A/B 上各自的读取窗细框。A/B 框重叠 = 多 block 读同一面板（共享语义）。 */
+    drawBlockPanel(ctx, cur, now) {
+      const { M, N, K, mc, nc, kc } = this.cfg;
+      const { i2, j2, k2 } = cur;
+      const mcE = Math.min(mc, M - i2), ncE = Math.min(nc, N - j2), kcE = Math.min(kc, K - k2);
+      const L = this.L, p = L.p;
+      const c = U.BLOCK_COLORS[(cur.b || 0) % U.BLOCK_COLORS.length];
+      const pulse = 0.55 + 0.4 * Math.sin(now / 300 + (cur.b || 0) * 2.1);
+      ctx.globalAlpha = U.clamp(pulse, 0.2, 0.95);
+      glowRect(ctx, L.cX + j2 * p, L.cY + i2 * p, ncE * p, mcE * p, c);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = c + '80';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(L.aX + k2 * p + 0.5, L.aY + i2 * p + 0.5, kcE * p - 1, mcE * p - 1);
+      ctx.strokeRect(L.bX + j2 * p + 0.5, L.bY + k2 * p + 0.5, ncE * p - 1, kcE * p - 1);
+    }
+
+    /* ---------- block 领地区域（一次绘制） ---------- */
+    drawBlockRegions(ctx) {
+      const { M, N, mc, nc } = this.cfg;
+      const L = this.L, p = L.p;
+      const nBlocks = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
+      if (nBlocks <= 1) return;
+      const perI = Math.ceil(M / mc / this.cfg.biBlocks);
+      const perJ = Math.ceil(N / nc / this.cfg.bjBlocks);
+      for (let b = 0; b < nBlocks; b++) {
+        const bi = Math.floor(b / this.cfg.bjBlocks), bj = b % this.cfg.bjBlocks;
+        const i2s = bi * perI * mc, i2e = Math.min((bi + 1) * perI * mc, M);
+        const j2s = bj * perJ * nc, j2e = Math.min((bj + 1) * perJ * nc, N);
+        const c = U.BLOCK_COLORS[b % U.BLOCK_COLORS.length];
+        ctx.fillStyle = c + '14';
+        ctx.fillRect(L.cX + j2s * p, L.cY + i2s * p, (j2e - j2s) * p, (i2e - i2s) * p);
+        ctx.strokeStyle = c + '40';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(L.cX + j2s * p + 0.5, L.cY + i2s * p + 0.5, (j2e - j2s) * p - 1, (i2e - i2s) * p - 1);
+        ctx.fillStyle = c;
+        ctx.font = 'bold 9px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('B' + b, L.cX + j2s * p + 3, L.cY + i2s * p + 3);
+        ctx.textBaseline = 'alphabetic';
+      }
+    }
+
+    /* ---------- 单 block 动态高亮（多 block 并发时各调一次） ---------- */
+    drawHighlights(ctx, cur, now, drawK2Band) {
       const { M, N, K, mc, nc, kc } = this.cfg;
       const { i2, j2, k2, i, j, k, mr, nr } = cur;
       const mcE = Math.min(mc, M - i2), ncE = Math.min(nc, N - j2), kcE = Math.min(kc, K - k2);
       const L = this.L, p = L.p;
-      const nBlocks = (this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1);
-      const bColor = nBlocks > 1 ? U.BLOCK_COLORS[cur.b % U.BLOCK_COLORS.length] : null;
+      const nBlocks = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
+      const bColor = nBlocks > 1 ? U.BLOCK_COLORS[(cur.b || 0) % U.BLOCK_COLORS.length] : null;
 
-      // block 领地区域：C 矩阵上各 block 的 (i2,j2) 面板范围着色
-      if (nBlocks > 1) {
-        const perI = Math.ceil(M / mc / this.cfg.biBlocks);
-        const perJ = Math.ceil(N / nc / this.cfg.bjBlocks);
-        for (let b = 0; b < nBlocks; b++) {
-          const bi = Math.floor(b / this.cfg.bjBlocks), bj = b % this.cfg.bjBlocks;
-          const i2s = bi * perI * mc, i2e = Math.min((bi + 1) * perI * mc, M);
-          const j2s = bj * perJ * nc, j2e = Math.min((bj + 1) * perJ * nc, N);
-          const c = U.BLOCK_COLORS[b % U.BLOCK_COLORS.length];
-          ctx.fillStyle = c + '10';
-          ctx.fillRect(L.cX + j2s * p, L.cY + i2s * p, (j2e - j2s) * p, (i2e - i2s) * p);
-          ctx.strokeStyle = c + '30';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(L.cX + j2s * p + 0.5, L.cY + i2s * p + 0.5, (j2e - j2s) * p - 1, (i2e - i2s) * p - 1);
-          ctx.fillStyle = c;
-          ctx.font = 'bold 8px ui-monospace, monospace';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'top';
-          ctx.fillText('B' + b, L.cX + j2s * p + 3, L.cY + i2s * p + 3);
-        }
+      // k2 切片带（只画一次，所有 block 近似同步）
+      if (drawK2Band) {
+        ctx.fillStyle = C_K + '0.07)';
+        ctx.fillRect(L.aX + k2 * p, L.aY, kcE * p, L.aH);
+        ctx.fillRect(L.bX, L.bY + k2 * p, L.bW, kcE * p);
       }
-
-      // k2 切片带
-      ctx.fillStyle = C_K + '0.07)';
-      ctx.fillRect(L.aX + k2 * p, L.aY, kcE * p, L.aH);
-      ctx.fillRect(L.bX, L.bY + k2 * p, L.bW, kcE * p);
 
       // L2 面板框（多 block 时用 block 色标注当前归属）
       const panelColor = bColor || C_L2;
