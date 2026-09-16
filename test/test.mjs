@@ -188,7 +188,7 @@ console.log('=== 9. 延迟模型: 记账零耗时 / 事务=带宽+延迟 / 延�
     let acct = 0;
     for (let i = 0; i < res.events.length; i++) {
       const e = res.events[i];
-      if (e.type === 'hit' || e.type === 'evict' || e.type === 'oversize') acct += dwellOf(res.events, i, res.stats.totalTime);
+      if (e.type === 'hit' || e.type === 'evict' || e.type === 'oversize') acct += dwellOf(res.events, i, res.stats.serialTotalTime);
     }
     check('记账事件(hit/evict/oversize)耗时 == 0', acct === 0, acct + 'ns');
   }
@@ -201,7 +201,7 @@ console.log('=== 9. 延迟模型: 记账零耗时 / 事务=带宽+延迟 / 延�
     for (let i = 0; i < res.events.length; i++) {
       const e = res.events[i];
       if (e.type !== 'xfer') continue;
-      const d = dwellOf(res.events, i, res.stats.totalTime);
+      const d = dwellOf(res.events, i, res.stats.serialTotalTime);
       xferNs += d;
       if (e.from === 'dram' || e.to === 'dram') {
         nDram++;
@@ -222,7 +222,7 @@ console.log('=== 9. 延迟模型: 记账零耗时 / 事务=带宽+延迟 / 延�
     const perByte = (cfg0) => {
       const cfg = MSim.normalize(cfg0).cfg;
       const res = MSim.buildTrace(cfg);
-      return res.stats.totalTime / (res.stats.dramRead + res.stats.dramWrite);
+      return res.stats.serialTotalTime / (res.stats.dramRead + res.stats.dramWrite);
     };
     const naive = perByte({ M: 16, N: 16, K: 16, mc: 1, nc: 1, kc: 1, mr: 1, nr: 1, l2KB: 0.125, l1KB: 0.0625 });
     const blocked = perByte({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4, l2KB: 2.5, l1KB: 1 });

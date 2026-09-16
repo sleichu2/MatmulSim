@@ -230,14 +230,27 @@
       if (dirty) L.dirty++;
     };
 
+    /* ---- 并行时间模型 ----
+     * 私有资源（计算单元 / L1 / 寄存器）按 block 完全并行：各 block 的
+     * 私有时间独立累加，互不阻塞。共享资源（L2 / DRAM 带宽）全局固定：
+     * 所有 block 的共享访存时间串行叠加，竞争同一带宽。
+     * 并行总时间 = max(最慢 block 的私有时间, 全部共享访存时间)——
+     * 计算主导场景加速比 ≈ nBlocks，访存主导场景受共享带宽压制。
+     * nBlocks = 1 时退化为 max(计算时间, 访存时间) = 完美流水线估计。 */
+    const nBlocks = cfg.biBlocks * cfg.bjBlocks;
+    const parPriv = new Array(nBlocks).fill(0);   // 各 block 的私有时间
+    let parShared = 0;                            // 共享 L2/DRAM 访存总时间
+
     /** 搬运时长 = 带宽项 + 固定延迟项。带宽按瓶颈侧计（DRAM 参与读/写
      *  都按 DRAM 带宽）；延迟按事务类型计——块越小延迟占比越大，
-     *  「分块摊销延迟」由模型自然产生（见 README）。 */
+     *  「分块摊销延迟」由模型自然产生（见 README）。
+     *  所有 xfer（L2↔DRAM↔L1）都走共享资源，累加到 parShared。 */
     let xferNs = 0;   // 全部 xfer 事件真实时长累计（含延迟）
     const xferTime = (from, to, bytes, dirty) => {
       const dram = from === 'dram' || to === 'dram';
       const d = bytes / (dram ? BW.dram : BW[from]) + (dram ? LAT.dram : LAT.l2);
       xferNs += d;
+      parShared += d;   // 共享资源（L2/DRAM 带宽）
       linkAdd(from + '>' + to, bytes, d, dirty);
       return d;
     };
@@ -339,7 +352,6 @@
     const MAC_AT = innerOf(['ir', 'jr', 'kr']);
     const STORE_AT = innerOf(['i2', 'j2']);
 
-    const nBlocks = cfg.biBlocks * cfg.bjBlocks;
     const panelI = Math.ceil(M / mc), panelJ = Math.ceil(N / nc);
     const perI = Math.ceil(panelI / cfg.biBlocks), perJ = Math.ceil(panelJ / cfg.bjBlocks);
 
@@ -392,26 +404,29 @@
       } else if (key === 'Reg') {
         // C 微块载入寄存器：物理上是 L2 读（带宽与延迟按 L2 链路计），
         // 跨其内层的 kr 循环驻留；寄存器写回即最终的 C 写路径。
-        // 同时 touch L2 上的 C 面板——活跃累加中的面板保持 LRU 新鲜度，
-        // 否则会被 A/B 面板换代挤出（产生多余的脏替换写回）
+        // L2 带宽共享 → parShared。
         const bytes = mrE * nrE * ELEM;
         regBytes += bytes;
         mm.touch('l2', 'C:' + bi + ':' + bj);
         const d = bytes / BW.l2 + LAT.l2;
         linkAdd('l2>reg', bytes, d);
+        parShared += d;
         emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes }, d);
       } else if (key === 'MAC') {
         // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）；
-        // 操作数流经 L1→Reg 端口（与 FMA 串行，见 README 简化声明）
+        // 操作数流经 L1→Reg 端口。计算+L1+寄存器全部是 block 私有资源
+        // → parPriv[b]，并行执行时互不阻塞。
         const f = 2 * mrE * nrE;
         const ob = (mrE + nrE) * ELEM;
         regBytes += ob;
         linkAdd('l1>reg', ob, ob / BW.reg);
         flops += f;
+        const d = f / PEAK + ob / BW.reg;
+        parPriv[b] += d;
         emit({
           type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
           flops: f, i2, j2, k2, regBytes: ob, b,
-        }, f / PEAK + ob / BW.reg);
+        }, d);
       } else { // Store: C 块写回（若已被脏替换冲刷则跳过，防双计）
         const cId = 'C:' + bi + ':' + bj;
         const cBytes = mcE * ncE * ELEM;
@@ -466,7 +481,17 @@
 
     const computeTime = flops / PEAK;
 
-    // 链路统计：实测带宽 = bytes/ns（含固定延迟）；理论 = 瓶颈侧带宽常量
+    /* 并行时间模型总结：
+     * totalTime = max(最慢 block 私有时间, 全部共享访存时间)。
+     * - 私有 = 计算+L1+寄存器（各 block 完全并行，互不阻塞）
+     * - 共享 = L2/DRAM 带宽（全局固定，所有 block 竞争）
+     * 计算主导 → 加速比 ≈ nBlocks；访存主导 → 共享带宽压制加速比 */
+    const maxPrivTime = Math.max(...parPriv, 0);
+    const parallelTotalTime = Math.max(maxPrivTime, parShared);
+    const serialTotalTime = t;   // 串行 wall time（事件轨迹全部叠加）
+    const speedup = parallelTotalTime > 0 ? serialTotalTime / parallelTotalTime : 1;
+
+    // 链路统计：实测带宽 = bytes/ns（含延迟）；理论 = 瓶颈侧带宽常量
     const THEORY = {
       'dram>l2': BW.dram, 'l2>l1': BW.l2, 'dram>l1': BW.dram,
       'l2>reg': BW.l2, 'l1>reg': BW.reg, 'l2>dram': BW.dram,
@@ -487,10 +512,13 @@
       stats: {
         l2: mm.stats.l2, l1: mm.stats.l1,
         flops, dramRead, dramWrite, l2Bytes, l1Bytes: regBytes, regBytes,
-        computeTime, transferTime: xferNs, totalTime: t,
+        computeTime, transferTime: xferNs,
+        serialTotalTime, parallelTotalTime, totalTime: parallelTotalTime,
+        speedup,
+        parPrivTime: maxPrivTime, parSharedTime: parShared,
         links: linkStats,
         ai: flops / Math.max(1, dramRead + dramWrite),   // 算术强度 FLOP/B
-        achieved: flops / Math.max(1, t),                // GFLOPS（串行回放）
+        achieved: flops / Math.max(1, parallelTotalTime), // GFLOPS（并行模型）
       },
     };
   }
