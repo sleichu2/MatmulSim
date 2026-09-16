@@ -59,5 +59,7 @@
     return ns.toFixed(0) + 'ns';
   }
 
-  global.MUtil = { mulberry32, clamp, lerp, lerpRGB, css, valueRGB, heatRGB, valueColor, heatColor, fmt, fmtBytes, fmtNs };
+  global.MUtil = { mulberry32, clamp, lerp, lerpRGB, css, valueRGB, heatRGB, valueColor, heatColor,
+    BLOCK_COLORS: ['#58a6ff', '#3fb950', '#f0883e', '#d2a8ff', '#ffc95c', '#f85149', '#7ee787', '#bc8cff'],
+    fmt, fmtBytes, fmtNs };
 })(typeof window !== 'undefined' ? window : globalThis);

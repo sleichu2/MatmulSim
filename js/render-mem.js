@@ -94,7 +94,8 @@
 
       // ---------- L2 / L1 ----------
       this.drawCacheRow(ctx, 'l2', player, cfg.l2Bytes, labelW, contentX, contentW, y + rowH + gap, rowH);
-      this.drawCacheRow(ctx, 'l1', player, cfg.l1Bytes, labelW, contentX, contentW, y + 2 * (rowH + gap), rowH);
+      const nL1 = ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1)) || 1;
+      this.drawCacheRow(ctx, 'l1', player, cfg.l1Bytes * nL1, labelW, contentX, contentW, y + 2 * (rowH + gap), rowH);
 
       // ---------- 寄存器 ----------
       const ry = y + 3 * (rowH + gap);
@@ -110,7 +111,9 @@
 
     drawCacheRow(ctx, level, player, capBytes, labelW, contentX, contentW, y, rowH) {
       rowBg(ctx, 0, y, this.w, rowH);
-      rowTitle(ctx, 6, y + 4, level.toUpperCase(), U.fmtBytes(capBytes), rowH, this.w);
+      const nBlk = level === 'l1' ? (((player.cfg || {}).biBlocks || 1) * ((player.cfg || {}).bjBlocks || 1)) || 1 : 1;
+      rowTitle(ctx, 6, y + 4, level.toUpperCase(),
+        U.fmtBytes(capBytes) + (nBlk > 1 ? ' ×' + nBlk + '(独享)' : ''), rowH, this.w);
       const map = level === 'l2' ? player.memL2 : player.memL1;
       const blocks = Array.from(map.values());
       const n = blocks.length;
@@ -121,12 +124,21 @@
         const color = PANEL_COLORS[b.panel] || '#8b98a9';
         ctx.fillStyle = color;
         ctx.fillRect(bx, y + 7, Math.min(slot, contentX + contentW - 4 - bx), 17);
+        // 并行切分下 L1 块按 block 着边框色（独享语义可见）
+        if (level === 'l1' && b.b !== undefined && nBlk > 1) {
+          const bc = U.BLOCK_COLORS[b.b % U.BLOCK_COLORS.length];
+          ctx.strokeStyle = bc;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(bx + 0.5, y + 7.5, Math.min(slot, contentX + contentW - 4 - bx) - 1, 16);
+        }
         if (slot >= 26) {
           ctx.fillStyle = '#0b0f14';
           ctx.font = '8px ui-monospace, monospace';
           ctx.textAlign = 'left';
           // C 块为脏块（写分配），标 ✱ 提示其淘汰会产生写回流量
-          ctx.fillText(String(b.panel) + (b.panel === 'C' ? ' ✱' : ''), bx + 3, y + 19);
+          const label = String(b.panel) + (b.panel === 'C' ? ' ✱' : '')
+            + (level === 'l1' && b.b !== undefined && nBlk > 1 ? ' B' + b.b : '');
+          ctx.fillText(label, bx + 3, y + 19);
         }
         bx += slot + 2;
       }

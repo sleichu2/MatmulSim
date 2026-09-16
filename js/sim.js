@@ -287,18 +287,18 @@
       if (mm.lookup('l1', id, b)) {
         mm.stats.l1.hit++;
         mm.touch('l1', id, b);
-        emit({ type: 'hit', level: 'l1', id }, 0);
+        emit({ type: 'hit', level: 'l1', id, b }, 0);
         return;
       }
       mm.stats.l1.miss++;
       const { evicted, resident } = mm.insert('l1', id, panel, bytes, null, b);
-      for (const b of evicted) emit({ type: 'evict', level: 'l1', id: b.id }, 0);
-      if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes }, 0);
+      for (const blk of evicted) emit({ type: 'evict', level: 'l1', id: blk.id, b }, 0);
+      if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes, b }, 0);
       if (!mm.lookup('l2', tileId)) {
         // 级联缺失：L2 中无对应面板（容量不足/被淘汰）→ 直接访问 DRAM
         mm.stats.l2.miss++;
         dramRead += bytes;
-        emit({ type: 'xfer', from: 'dram', to: 'l1', id, panel, bytes, miss: true, cascade: true },
+        emit({ type: 'xfer', from: 'dram', to: 'l1', id, panel, bytes, miss: true, cascade: true, b },
           xferTime('dram', 'l1', bytes));
         return;
       }
@@ -306,7 +306,7 @@
       // 否则会被后续面板分配挤出，产生多余的脏替换与重读）
       mm.touch('l2', tileId);
       l2Bytes += bytes;
-      emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
+      emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true, b }, xferTime('l2', 'l1', bytes));
     };
 
     /* ----- 顺序驱动 + 并行 block 的执行引擎 -----

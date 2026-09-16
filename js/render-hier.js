@@ -79,8 +79,9 @@
         }
       };
       const pl = player || { l1Hit: 0, l1Miss: 0, l2Hit: 0, l2Miss: 0, dramR: 0, dramW: 0 };
+      const nB = ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1)) || 1;
       boxText('reg', ['REG · 寄存器', '累加与操作数']);
-      boxText('l1', ['L1 · ' + U.fmtBytes(cfg.l1Bytes), '命中率 ' + hitPct(pl.l1Hit, pl.l1Miss)]);
+      boxText('l1', ['L1 ×' + nB + '（独享）', '容量 ' + U.fmtBytes(cfg.l1Bytes * nB), '命中率 ' + hitPct(pl.l1Hit, pl.l1Miss)]);
       boxText('l2', ['L2 · ' + U.fmtBytes(cfg.l2Bytes), '命中率 ' + hitPct(pl.l2Hit, pl.l2Miss)]);
       boxText('dram', ['DRAM · 主存', '读 ' + U.fmtBytes(pl.dramR) + ' · 写 ' + U.fmtBytes(pl.dramW)]);
 

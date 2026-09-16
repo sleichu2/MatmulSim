@@ -267,16 +267,41 @@
       const { i2, j2, k2, i, j, k, mr, nr } = cur;
       const mcE = Math.min(mc, M - i2), ncE = Math.min(nc, N - j2), kcE = Math.min(kc, K - k2);
       const L = this.L, p = L.p;
+      const nBlocks = (this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1);
+      const bColor = nBlocks > 1 ? U.BLOCK_COLORS[cur.b % U.BLOCK_COLORS.length] : null;
+
+      // block 领地区域：C 矩阵上各 block 的 (i2,j2) 面板范围着色
+      if (nBlocks > 1) {
+        const perI = Math.ceil(M / mc / this.cfg.biBlocks);
+        const perJ = Math.ceil(N / nc / this.cfg.bjBlocks);
+        for (let b = 0; b < nBlocks; b++) {
+          const bi = Math.floor(b / this.cfg.bjBlocks), bj = b % this.cfg.bjBlocks;
+          const i2s = bi * perI * mc, i2e = Math.min((bi + 1) * perI * mc, M);
+          const j2s = bj * perJ * nc, j2e = Math.min((bj + 1) * perJ * nc, N);
+          const c = U.BLOCK_COLORS[b % U.BLOCK_COLORS.length];
+          ctx.fillStyle = c + '10';
+          ctx.fillRect(L.cX + j2s * p, L.cY + i2s * p, (j2e - j2s) * p, (i2e - i2s) * p);
+          ctx.strokeStyle = c + '30';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(L.cX + j2s * p + 0.5, L.cY + i2s * p + 0.5, (j2e - j2s) * p - 1, (i2e - i2s) * p - 1);
+          ctx.fillStyle = c;
+          ctx.font = 'bold 8px ui-monospace, monospace';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText('B' + b, L.cX + j2s * p + 3, L.cY + i2s * p + 3);
+        }
+      }
 
       // k2 切片带
       ctx.fillStyle = C_K + '0.07)';
       ctx.fillRect(L.aX + k2 * p, L.aY, kcE * p, L.aH);
       ctx.fillRect(L.bX, L.bY + k2 * p, L.bW, kcE * p);
 
-      // L2 面板框
-      glowRect(ctx, L.aX + k2 * p, L.aY + i2 * p, kcE * p, mcE * p, C_L2);
-      glowRect(ctx, L.bX + j2 * p, L.bY + k2 * p, ncE * p, kcE * p, C_L2);
-      glowRect(ctx, L.cX + j2 * p, L.cY + i2 * p, ncE * p, mcE * p, C_L2);
+      // L2 面板框（多 block 时用 block 色标注当前归属）
+      const panelColor = bColor || C_L2;
+      glowRect(ctx, L.aX + k2 * p, L.aY + i2 * p, kcE * p, mcE * p, panelColor);
+      glowRect(ctx, L.bX + j2 * p, L.bY + k2 * p, ncE * p, kcE * p, panelColor);
+      glowRect(ctx, L.cX + j2 * p, L.cY + i2 * p, ncE * p, mcE * p, panelColor);
 
       // L1 微面板 (Ar / Br / C 微块)
       ctx.fillStyle = 'rgba(210,168,255,0.07)';
@@ -295,8 +320,9 @@
       ctx.fillRect(L.aX + k * p, L.aY, p, L.aH);
       ctx.fillRect(L.bX, L.bY + k * p, L.bW, p);
 
-      // 数据流箭头 A→C、B→C
-      ctx.strokeStyle = 'rgba(255,196,90,0.45)';
+      // 数据流箭头 A→C、B→C（多 block 时用 block 色）
+      const arrowColor = bColor ? bColor + '70' : 'rgba(255,196,90,0.45)';
+      ctx.strokeStyle = arrowColor;
       ctx.lineWidth = 1.4;
       ctx.setLineDash([4, 5]);
       ctx.lineDashOffset = -((now / 40) % 9);
@@ -311,6 +337,15 @@
       ctx.quadraticCurveTo(bXmid, L.cY - L.gap / 2, L.cX + (j + nr / 2) * p, L.cY);
       ctx.stroke();
       ctx.setLineDash([]);
+
+      // block 索引标签（多 block 时显示在 C 微块旁）
+      if (bColor) {
+        ctx.fillStyle = bColor;
+        ctx.font = 'bold 9px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('B' + cur.b, L.cX + (j + nr) * p + 3, L.cY + i * p + 2);
+      }
     }
 
     /* ---------- 微内核放大动画 ---------- */

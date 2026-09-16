@@ -122,7 +122,7 @@
           if (ev.from === 'dram') this.dramR += ev.bytes;
           if (ev.from === 'l2' && ev.to === 'dram') { this.dramW += ev.bytes; this.memL2.delete(ev.id); }
           if (ev.to === 'l2' && !ev.oversize) this.memL2.set(ev.id, { panel: ev.panel, bytes: ev.bytes });
-          if (ev.to === 'l1') { this.memL1.set(ev.id, { panel: ev.panel, bytes: ev.bytes }); this.l1Miss++; }
+          if (ev.to === 'l1') { this.memL1.set(ev.id, { panel: ev.panel, bytes: ev.bytes, b: ev.b }); this.l1Miss++; }
           if (ev.from === 'l2' && ev.to === 'l1') this.l2B += ev.bytes;
           if (ev.from === 'dram' && ev.to === 'l2' && ev.miss) this.l2Miss++;
           if (ev.from === 'dram' && ev.to === 'l1') this.l2Miss++; // 级联缺失计为 L2 未命中
