@@ -380,7 +380,35 @@ console.log('=== 13. 并行切分: block 数值正确 / L1 独享 / 共享 L2 / 
       two.dram + ' vs ' + one.dram);
   }
 
-  // 13e. K 轴切分（split-K）暂不支持：跨 block 归约依赖，列入 TODO
+  // 13e. 计算单元池：单元数可单独设置；单元 < 块数时计算在单元上串行排队
+  {
+    // 计算主导配置（大面板 + 大微内核摊薄访存与延迟），单元数差异才能在
+    // 总时间上显现——访存主导配置会被共享带宽项掩盖
+    const base = { M: 128, N: 64, K: 64, mc: 64, nc: 64, kc: 64, mr: 8, nr: 8,
+      l2KB: 256, l1KB: 64 };
+    const run = (bl) => MSim.buildTrace(MSim.normalize({ ...base, ...bl }).cfg).stats;
+    // 钳制：单元数 > 块数 → 钳到块数
+    const c1 = MSim.normalize({ ...base, biBlocks: 2, nCores: 8 });
+    check('计算单元数超过块数时钳制', c1.cfg.nCores === 2 && c1.warnings.length > 0,
+      c1.cfg.nCores);
+    // 自动（0）与显式 = 块数等价：时间模型结果完全一致
+    const auto = run({ biBlocks: 2 });
+    const expl = run({ biBlocks: 2, nCores: 2 });
+    check('自动计算单元 == 显式块数（totalTime 一致）',
+      auto.totalTime === expl.totalTime && auto.nCores === 2 && expl.nCores === 2,
+      auto.totalTime + ' vs ' + expl.totalTime);
+    // 单元受限：1 单元跑 2 块 → 计算排队，总时间显著变长
+    const one = run({ biBlocks: 2, nCores: 1 });
+    check('1 单元 2 块慢于 2 单元（计算串行排队）', one.totalTime > expl.totalTime,
+      one.totalTime.toFixed(0) + ' vs ' + expl.totalTime.toFixed(0));
+    check('1 单元加速比 < 2 单元加速比', one.speedup < expl.speedup,
+      one.speedup.toFixed(2) + ' vs ' + expl.speedup.toFixed(2));
+    // 单元数不影响计算量
+    check('受限单元 FLOPs 不变', one.flops === expl.flops && expl.flops === 2 * 128 * 64 * 64,
+      one.flops + ' vs ' + expl.flops);
+  }
+
+  // 13f. K 轴切分（split-K）暂不支持：跨 block 归约依赖，列入 TODO
   //      （normalize 不处理 kBlocks，传入无效果——此处仅文档化约束）
 }
 

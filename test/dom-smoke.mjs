@@ -69,7 +69,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'selOrder', 'selBI2', 'selBJ2', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
+  'selView', 'selOrder', 'selBI2', 'selBJ2', 'selCores', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, makeEl(/^canvas/.test(id) ? 'canvas' : 'div')));
 
@@ -262,6 +262,17 @@ frame(16);
 check('并行 2×2 应用无异常', errs.length === 0, errs[0]);
 check('并行 2×2 统计显示', byId.get('stBlk').textContent === '2×2 = 4',
   byId.get('stBlk').textContent);
+check('并行 2×2 自动计算单元 = 块数', byId.get('stCores').textContent === '4 · 自动',
+  byId.get('stCores').textContent);
+
+/* 计算单元受限：4 block 分时共享 2 个单元 → 统计显示有效单元数 */
+byId.get('selCores').value = '2';
+press(byId.get('btnApply'));
+frame(16);
+check('计算单元 2 应用无异常', errs.length === 0, errs[0]);
+check('计算单元 2 统计显示', byId.get('stCores').textContent === '2',
+  byId.get('stCores').textContent);
+byId.get('selCores').value = '0';
 press(byId.get('btnEnd'));
 frame(16);
 check('并行 2×2 运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,

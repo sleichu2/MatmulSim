@@ -83,7 +83,7 @@
   function normalize(raw) {
     const c = {
       M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4,
-      l2KB: 2.5, l1KB: 1, seed: 1, biBlocks: 1, bjBlocks: 1,
+      l2KB: 2.5, l1KB: 1, seed: 1, biBlocks: 1, bjBlocks: 1, nCores: 0,
     };
     Object.assign(c, raw || {});
     const warnings = [];
@@ -114,6 +114,14 @@
     const panelI = Math.ceil(c.M / c.mc), panelJ = Math.ceil(c.N / c.nc);
     if (c.biBlocks > panelI) { c.biBlocks = panelI; warnings.push('i2 并行块数超过面板数 ' + panelI + '，已钳制'); }
     if (c.bjBlocks > panelJ) { c.bjBlocks = panelJ; warnings.push('j2 并行块数超过面板数 ' + panelJ + '，已钳制'); }
+
+    // 计算单元数（并行计算资源份数，类比 CUDA SM）：0 = 自动（跟随并行
+    // 块数，每 block 独享一个单元、计算完全并行）。可单独设置以模拟
+    // 计算资源受限：单元数 < 块数时，多块分时共享同一单元串行排队。
+    c.nCores = Math.max(0, Math.round(Number(c.nCores)) || 0);
+    if (c.nCores > 8) { c.nCores = 8; warnings.push('计算单元数最多 8，已钳制'); }
+    const nBlk = c.biBlocks * c.bjBlocks;
+    if (c.nCores > nBlk) { c.nCores = nBlk; warnings.push('计算单元数超过并行块数 ' + nBlk + '，已钳制'); }
 
     if (!Array.isArray(c.order)) c.order = DEFAULT_ORDER.slice();
     if (!isLegalOrder(c.order)) {
@@ -231,14 +239,19 @@
     };
 
     /* ---- 并行时间模型 ----
-     * 私有资源（计算单元 / L1 / 寄存器）按 block 完全并行：各 block 的
-     * 私有时间独立累加，互不阻塞。共享资源（L2 / DRAM 带宽）全局固定：
-     * 所有 block 的共享访存时间串行叠加，竞争同一带宽。
-     * 并行总时间 = max(最慢 block 的私有时间, 全部共享访存时间)——
-     * 计算主导场景加速比 ≈ nBlocks，访存主导场景受共享带宽压制。
-     * nBlocks = 1 时退化为 max(计算时间, 访存时间) = 完美流水线估计。 */
+     * 私有资源（计算单元 / L1 / 寄存器）按计算单元并行：block b 的计算
+     * 时间累加到单元 b % nCores，单元间互不阻塞；多个 block 分派到同一
+     * 单元时，其计算在该单元上串行排队。nCores = 0（自动）时单元数 =
+     * 块数，每 block 独享一个单元、计算完全并行。
+     * 共享资源（L2 / DRAM 带宽）全局固定：所有 block 的共享访存时间
+     * 串行叠加，竞争同一带宽。
+     * 并行总时间 = max(最忙计算单元的负载, 全部共享访存时间)——
+     * 计算主导场景加速比 ≈ min(nCores, nBlocks)，访存主导场景受共享
+     * 带宽压制。nBlocks = 1 时退化为 max(计算时间, 访存时间)。 */
     const nBlocks = cfg.biBlocks * cfg.bjBlocks;
-    const parPriv = new Array(nBlocks).fill(0);   // 各 block 的私有时间
+    const nCores = cfg.nCores > 0 ? cfg.nCores : nBlocks;
+    const parPriv = new Array(nBlocks).fill(0);   // 各 block 的计算时间
+    const coreLoad = new Array(nCores).fill(0);   // 各计算单元的排队负载（私有时间）
     let parShared = 0;                            // 共享 L2/DRAM 访存总时间
 
     /** 搬运时长 = 带宽项 + 固定延迟项。带宽按瓶颈侧计（DRAM 参与读/写
@@ -414,8 +427,8 @@
         emit({ type: 'reg', panel: 'C', i: ir, j: jr, rows: mrE, cols: nrE, bytes }, d);
       } else if (key === 'MAC') {
         // 微内核：k 循环逐元素计算（A 列 + B 行 + 乘加 合并为一个 compute 事件）；
-        // 操作数流经 L1→Reg 端口。计算+L1+寄存器全部是 block 私有资源
-        // → parPriv[b]，并行执行时互不阻塞。
+        // 操作数流经 L1→Reg 端口。计算在 block 所属的计算单元上执行
+        // （b % nCores 分派，同单元多块串行排队），单元间真正并行。
         const f = 2 * mrE * nrE;
         const ob = (mrE + nrE) * ELEM;
         regBytes += ob;
@@ -423,9 +436,10 @@
         flops += f;
         const d = f / PEAK + ob / BW.reg;
         parPriv[b] += d;
+        coreLoad[b % nCores] += d;
         emit({
           type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
-          flops: f, i2, j2, k2, regBytes: ob, b,
+          flops: f, i2, j2, k2, regBytes: ob, b, core: b % nCores,
         }, d);
       } else { // Store: C 块写回（若已被脏替换冲刷则跳过，防双计）
         const cId = 'C:' + bi + ':' + bj;
@@ -482,11 +496,12 @@
     const computeTime = flops / PEAK;
 
     /* 并行时间模型总结：
-     * totalTime = max(最慢 block 私有时间, 全部共享访存时间)。
-     * - 私有 = 计算+L1+寄存器（各 block 完全并行，互不阻塞）
+     * totalTime = max(最忙计算单元负载, 全部共享访存时间)。
+     * - 私有 = 计算+寄存器端口，按计算单元并行（nCores 个单元，自动时
+     *   = 块数；block b → 单元 b % nCores，同单元多块串行排队）
      * - 共享 = L2/DRAM 带宽（全局固定，所有 block 竞争）
-     * 计算主导 → 加速比 ≈ nBlocks；访存主导 → 共享带宽压制加速比 */
-    const maxPrivTime = Math.max(...parPriv, 0);
+     * 计算主导 → 加速比 ≈ min(nCores, nBlocks)；访存主导 → 共享带宽压制 */
+    const maxPrivTime = Math.max(...coreLoad, 0);
     const parallelTotalTime = Math.max(maxPrivTime, parShared);
     const serialTotalTime = t;   // 串行 wall time（事件轨迹全部叠加）
     const speedup = parallelTotalTime > 0 ? serialTotalTime / parallelTotalTime : 1;
@@ -514,7 +529,7 @@
         flops, dramRead, dramWrite, l2Bytes, l1Bytes: regBytes, regBytes,
         computeTime, transferTime: xferNs,
         serialTotalTime, parallelTotalTime, totalTime: parallelTotalTime,
-        speedup,
+        speedup, nCores,
         parPrivTime: maxPrivTime, parSharedTime: parShared,
         links: linkStats,
         ai: flops / Math.max(1, dramRead + dramWrite),   // 算术强度 FLOP/B

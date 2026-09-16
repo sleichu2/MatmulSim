@@ -8,7 +8,7 @@
   /* 统计面板：分组单列。id 与 dom-smoke 断言耦合，勿随意改名 */
   const STAT_SECTIONS = [
     { title: '计算', rows: [['FLOPs', 'stFlops'], ['实测速率', 'stGf']] },
-    { title: '并行', rows: [['加速比', 'stSpd'], ['私有/共享时间', 'stPar']] },
+    { title: '并行', rows: [['加速比', 'stSpd'], ['计算单元', 'stCores'], ['私有/共享时间', 'stPar']] },
     { title: '访存', rows: [
       ['DRAM 读/写', 'stDram'],
       ['并行块', 'stBlk'],
@@ -151,7 +151,7 @@
         for (const [id, v] of Object.entries(map)) { const el = $('#' + id); if (el) el.value = v; }
         const sel = $('#selOrder');
         if (sel && cfg.order) sel.value = cfg.order.join(',');
-        const mapB = { selBI2: cfg.biBlocks || 1, selBJ2: cfg.bjBlocks || 1 };
+        const mapB = { selBI2: cfg.biBlocks || 1, selBJ2: cfg.bjBlocks || 1, selCores: cfg.nCores || 0 };
         for (const [id, v] of Object.entries(mapB)) { const el = $('#' + id); if (el) el.value = String(v); }
       },
       setCfgNote(warnings) {
@@ -170,6 +170,7 @@
         $b('stFlops').textContent = U.fmt(pl.flops, 1) + ' / ' + U.fmt(st.flops, 1);
         $b('stGf').textContent = (pl.flops > 0 ? pl.liveGF.toFixed(1) : '0.0') + ' / ' + global.MSim.PEAK;
         $b('stSpd').textContent = st.speedup ? st.speedup.toFixed(2) + '×' : '—';
+        $b('stCores').textContent = (st.nCores || 1) + (cfg.nCores ? '' : ' · 自动');
         $b('stPar').textContent = U.fmtNs(st.parPrivTime || 0) + ' / ' + U.fmtNs(st.parSharedTime || 0);
         $b('stDram').textContent = U.fmtBytes(pl.dramR) + ' / ' + U.fmtBytes(pl.dramW);
         $b('stBlk').textContent = nb + ' = ' + ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1));
@@ -207,6 +208,7 @@
       l1KB: parseFloat($('inL1').value),
       biBlocks: parseInt($('selBI2').value, 10) || 1,
       bjBlocks: parseInt($('selBJ2').value, 10) || 1,
+      nCores: parseInt($('selCores').value, 10) || 0,
       order: ($('selOrder').value || '').split(',').filter(Boolean),
     };
   }
