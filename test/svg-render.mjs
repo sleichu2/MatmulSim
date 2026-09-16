@@ -143,7 +143,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'selOrder', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
+  'selView', 'selOrder', 'selBI2', 'selBJ2', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, new El(id.startsWith('canvas') ? 'canvas' : 'div')));
 const documentStub = {

@@ -69,7 +69,7 @@ const STATIC_IDS = [
   'presetBar', 'btnPlay', 'btnReset', 'btnEnd', 'btnStep', 'selStep', 'rngSpeed', 'lblSpeed',
   'configPanel', 'btnApply', 'btnReseed', 'cfgNote', 'chkAutoCache',
   'inL2', 'inL1', 'inM', 'inN', 'inK', 'inMc', 'inNc', 'inKc', 'inMr', 'inNr', 'inSeed',
-  'selView', 'selOrder', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
+  'selView', 'selOrder', 'selBI2', 'selBJ2', 'progressFill', 'progressText', 'statsBody', 'rooflineNote', 'legend', 'codeView',
 ];
 STATIC_IDS.forEach((id) => byId.set(id, makeEl(/^canvas/.test(id) ? 'canvas' : 'div')));
 
@@ -247,6 +247,32 @@ byId.get('selOrder').value = 'i2,j2,k2,ir,jr,kr';
 press(byId.get('btnApply'));
 frame(16);
 check('恢复默认循环序无异常', errs.length === 0, errs[0]);
+
+/* 并行切分：2×2 block 应用 → 运行到结束 → 数值正确（显式设 32³ 确保 2×2 有足够面板） */
+byId.get('selBI2').value = '2';
+byId.get('selBJ2').value = '2';
+byId.get('inM').value = '32';
+byId.get('inN').value = '32';
+byId.get('inK').value = '32';
+byId.get('inMc').value = '16';
+byId.get('inNc').value = '16';
+byId.get('inKc').value = '16';
+press(byId.get('btnApply'));
+frame(16);
+check('并行 2×2 应用无异常', errs.length === 0, errs[0]);
+check('并行 2×2 统计显示', byId.get('stBlk').textContent === '2×2 = 4',
+  byId.get('stBlk').textContent);
+press(byId.get('btnEnd'));
+frame(16);
+check('并行 2×2 运行到结束', byId.get('progressText').textContent.indexOf('完成') >= 0,
+  byId.get('progressText').textContent);
+check('并行 2×2 数值校验', byId.get('stErr').textContent.indexOf('✓') === 0,
+  byId.get('stErr').textContent);
+byId.get('selBI2').value = '1';
+byId.get('selBJ2').value = '1';
+press(byId.get('btnApply'));
+frame(16);
+check('恢复不并行无异常', errs.length === 0, errs[0]);
 
 /* 超大预设：256³ 构建 + 跑到结束 */
 const hugeBtn = byId.get('presetBar').children.find((c) => c.dataset.id === 'huge');

@@ -16,6 +16,7 @@
  * 10. 循环顺序：90 种合法嵌套全部数值正确、非法回退、顺序改变行为
  * 11. 超大矩阵：256³ 预设流量界、事件量预警
  * 12. 写路径与链路统计：脏替换、每面板恰写一次、流量配平、Player 镜像
+ * 13. 并行切分：block 数值正确、L1 独享、共享 L2、钳制
  * ============================================================ */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -315,6 +316,72 @@ console.log('=== 11. 超大矩阵 ===');
       .warnings.some((w) => w.indexOf('事件轨迹') === 0));
   check('正常规模无预警', MSim.normalize({ M: 96, N: 96, K: 96, mc: 32, nc: 32, kc: 32, mr: 8, nr: 8 })
     .warnings.length === 0);
+}
+
+console.log('=== 13. 并行切分: block 数值正确 / L1 独享 / 共享 L2 / 钳制 ===');
+{
+  // 13a. 钳制：块数超过面板数时回退
+  {
+    const n = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, biBlocks: 4, bjBlocks: 1 });
+    check('i2 并行块数超面板数时钳制', n.cfg.biBlocks === 2 && n.warnings.length > 0,
+      n.cfg.biBlocks);
+    check('合法范围内不钳制不警告', (() => {
+      const m = MSim.normalize({ M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, biBlocks: 2, bjBlocks: 2 });
+      return m.cfg.biBlocks === 2 && m.cfg.bjBlocks === 2 && !m.warnings.some((w) => w.indexOf('并行') === 0);
+    })());
+  }
+
+  // 13b. 全部并行配置数值正确（12³ mc=4 边缘块 + 2×2 切分）
+  {
+    const N = 12;
+    const A = MSim.randMatrix(N, N, 5), B = MSim.randMatrix(N, N, 6);
+    const refC = MSim.matmulRef(A, B, N, N, N);
+    let ok = 0;
+    const configs = [
+      { biBlocks: 1, bjBlocks: 1 }, { biBlocks: 2, bjBlocks: 1 },
+      { biBlocks: 1, bjBlocks: 2 }, { biBlocks: 2, bjBlocks: 2 },
+      { biBlocks: 3, bjBlocks: 3 },
+    ];
+    for (const bl of configs) {
+      const cfg = MSim.normalize({ M: N, N, K: N, mc: 4, nc: 4, kc: 4, mr: 2, nr: 2, ...bl }).cfg;
+      const res = MSim.buildTrace(cfg);
+      const C = new Float64Array(N * N);
+      for (const ev of res.events) {
+        if (ev.type !== 'compute') continue;
+        for (let ii = 0; ii < ev.mr; ii++)
+          for (let jj = 0; jj < ev.nr; jj++)
+            C[(ev.i + ii) * N + ev.j + jj] += A[(ev.i + ii) * N + ev.k] * B[ev.k * N + ev.j + jj];
+      }
+      let err = 0;
+      for (let i = 0; i < C.length; i++) err = Math.max(err, Math.abs(C[i] - refC[i]));
+      if (err < 1e-9 && res.stats.flops === 2 * N * N * N) ok++;
+    }
+    check('5 种并行配置全部数值正确', ok === configs.length, ok + '/' + configs.length);
+  }
+
+  // 13c. L1 独享：切分后 L1 总容量 = nBlocks×l1Bytes，
+  //      Ar/Br 的 L1 命中率不因切分下降（每 block 独立复用）
+  {
+    const base = { M: 32, N: 32, K: 32, mc: 16, nc: 16, kc: 16, mr: 4, nr: 4, l2KB: 10, l1KB: 3 };
+    const l1Hit = (bl) => MSim.buildTrace(MSim.normalize({ ...base, ...bl }).cfg).stats.l1.hit;
+    const h1 = l1Hit({}), h2 = l1Hit({ bjBlocks: 2 });
+    check('j2 切分 2 block 后 L1 命中总数 ≥ 串行 (L1 独享互不干扰)', h2 >= h1, h2 + ' vs ' + h1);
+  }
+
+  // 13d. 共享 L2：i2 切分时 B 面板跨 block 共享读，DRAM 读流量不增
+  {
+    const run = (bl) => {
+      const res = MSim.buildTrace(MSim.normalize({ M: 32, N: 32, K: 32, mc: 16, nc: 16, kc: 16,
+        mr: 4, nr: 4, l2KB: 10, l1KB: 3, ...bl }).cfg);
+      return { dram: res.stats.dramRead, flops: res.stats.flops };
+    };
+    const one = run({}), two = run({ bjBlocks: 2 });
+    check('j2 切分 2 block DRAM 读不增（A 面板共享 L2）', two.dram <= one.dram,
+      two.dram + ' vs ' + one.dram);
+  }
+
+  // 13e. K 轴切分（split-K）暂不支持：跨 block 归约依赖，列入 TODO
+  //      （normalize 不处理 kBlocks，传入无效果——此处仅文档化约束）
 }
 
 console.log('=== 12. 写路径与链路统计: 脏替换 / 配平 / 实测带宽 / Player 镜像 ===');

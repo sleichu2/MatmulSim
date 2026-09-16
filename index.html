@@ -49,6 +49,12 @@
   <label title="k 分块：A 面板(mc×kc) 与 B 面板(kc×nc) 共用同一 kc——收缩维必须对齐，无需按矩阵分开">kc <input id="inKc" type="number" min="1" step="1"></label>
   <label class="sep" title="微内核 A 微面板行数（寄存器级 mr×nr）">mr <input id="inMr" type="number" min="1" step="1"></label>
   <label title="微内核 B 微面板列数（寄存器级 mr×nr）">nr <input id="inNr" type="number" min="1" step="1"></label>
+  <label class="sep" title="并行切分：沿 i2 面板轴切成的 block 数，每个 block 独享 L1、共享 L2（类比 CUDA block）；K 轴切分暂不支持">i2并行
+    <select id="selBI2"><option>1</option><option>2</option><option>4</option><option>8</option></select>
+  </label>
+  <label title="并行切分：沿 j2 面板轴切成的 block 数">j2并行
+    <select id="selBJ2"><option>1</option><option>2</option><option>4</option><option>8</option></select>
+  </label>
   <label class="sep">种子 <input id="inSeed" type="number" step="1"></label>
   <label class="sep" title="L2 缓存容量">L2(KB) <input id="inL2" type="number" min="0.125" step="0.125"></label>
   <label title="L1 缓存容量">L1(KB) <input id="inL1" type="number" min="0.0625" step="0.0625"></label>

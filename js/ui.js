@@ -10,6 +10,7 @@
     { title: '计算', rows: [['FLOPs', 'stFlops'], ['实测速率', 'stGf']] },
     { title: '访存', rows: [
       ['DRAM 读/写', 'stDram'],
+      ['并行块', 'stBlk'],
       ['L2 命中/未中', 'stL2h'],
       ['L2 淘汰/超容', 'stL2c'],
       ['L1 命中/未中', 'stL1c'],
@@ -69,6 +70,15 @@
         opt.textContent = o.join(' ') + (NOTES[v] ? ' — ' + NOTES[v] : '');
         sel.appendChild(opt);
       });
+      // 并行切分下拉
+      for (const id of ['selBI2', 'selBJ2']) {
+        const s = $('#' + id);
+        ['1', '2', '4', '8'].forEach((v) => {
+          const o = document.createElement('option');
+          o.value = v; o.textContent = v;
+          s.appendChild(o);
+        });
+      }
     }
     $('#btnApply').onclick = () => cb.onApply(readConfig(), $('#chkAutoCache').checked, $('#selView').value);
     $('#btnReseed').onclick = () => cb.onReseed();
@@ -139,6 +149,8 @@
         for (const [id, v] of Object.entries(map)) { const el = $('#' + id); if (el) el.value = v; }
         const sel = $('#selOrder');
         if (sel && cfg.order) sel.value = cfg.order.join(',');
+        const mapB = { selBI2: cfg.biBlocks || 1, selBJ2: cfg.bjBlocks || 1 };
+        for (const [id, v] of Object.entries(mapB)) { const el = $('#' + id); if (el) el.value = String(v); }
       },
       setCfgNote(warnings) {
         $('#cfgNote').textContent = warnings.length ? '⚠ ' + warnings.join('；') : '';
@@ -151,10 +163,12 @@
       setRooflineNote(text) { $('#rooflineNote').textContent = text; },
       setStats(s) {
         const $b = (id) => $('#' + id);
-        const pl = s.player, st = s.result.stats;
+        const pl = s.player, st = s.result.stats, cfg = s.cfg;
+        const nb = (cfg.biBlocks || 1) + '×' + (cfg.bjBlocks || 1);
         $b('stFlops').textContent = U.fmt(pl.flops, 1) + ' / ' + U.fmt(st.flops, 1);
         $b('stGf').textContent = (pl.flops > 0 ? pl.liveGF.toFixed(1) : '0.0') + ' / ' + global.MSim.PEAK;
         $b('stDram').textContent = U.fmtBytes(pl.dramR) + ' / ' + U.fmtBytes(pl.dramW);
+        $b('stBlk').textContent = nb + ' = ' + ((cfg.biBlocks || 1) * (cfg.bjBlocks || 1));
         $b('stL2h').textContent = pl.l2Hit + ' / ' + pl.l2Miss;
         $b('stL2c').textContent = pl.evicts + ' / ' + pl.oversize;
         $b('stL1c').textContent = pl.l1Hit + ' / ' + pl.l1Miss;
@@ -187,6 +201,8 @@
       seed: parseInt($('inSeed').value, 10),
       l2KB: parseFloat($('inL2').value),
       l1KB: parseFloat($('inL1').value),
+      biBlocks: parseInt($('selBI2').value, 10) || 1,
+      bjBlocks: parseInt($('selBJ2').value, 10) || 1,
       order: ($('selOrder').value || '').split(',').filter(Boolean),
     };
   }

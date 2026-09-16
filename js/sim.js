@@ -83,7 +83,7 @@
   function normalize(raw) {
     const c = {
       M: 16, N: 16, K: 16, mc: 8, nc: 8, kc: 8, mr: 4, nr: 4,
-      l2KB: 2.5, l1KB: 1, seed: 1,
+      l2KB: 2.5, l1KB: 1, seed: 1, biBlocks: 1, bjBlocks: 1,
     };
     Object.assign(c, raw || {});
     const warnings = [];
@@ -106,6 +106,14 @@
     if (macs > 3e6) {
       warnings.push('事件轨迹约 ' + Math.round(macs / 1e6) + 'M 条：构建与回放将明显变慢、内存占用高（建议增大 mr/nr 或 kc）');
     }
+
+    // 并行切分（类比 CUDA block）：i2/j2 轴各切成若干份，每份一个 block
+    // （独享 L1、共享 L2）。K 轴切分（split-K）因跨 block 归约依赖暂不支持。
+    c.biBlocks = Math.max(1, Math.round(Number(c.biBlocks)) || 1);
+    c.bjBlocks = Math.max(1, Math.round(Number(c.bjBlocks)) || 1);
+    const panelI = Math.ceil(c.M / c.mc), panelJ = Math.ceil(c.N / c.nc);
+    if (c.biBlocks > panelI) { c.biBlocks = panelI; warnings.push('i2 并行块数超过面板数 ' + panelI + '，已钳制'); }
+    if (c.bjBlocks > panelJ) { c.bjBlocks = panelJ; warnings.push('j2 并行块数超过面板数 ' + panelJ + '，已钳制'); }
 
     if (!Array.isArray(c.order)) c.order = DEFAULT_ORDER.slice();
     if (!isLegalOrder(c.order)) {
@@ -152,27 +160,30 @@
   /* ---------- 容量受限 LRU 缓存模型 ----------
    * 块携带脏位：C 面板是唯一可写数据（写分配/读改写语义，载入即脏），
    * A/B 面板只读恒为干净块。脏块被 LRU 淘汰 = 脏替换，须先冲刷回
-   * 下一层（L2 脏块 → DRAM 写回），产生写流量；干净块淘汰零流量。 */
+   * 下一层（L2 脏块 → DRAM 写回），产生写流量；干净块淘汰零流量。
+   * 并行切分下 L1 按 block 独享（nBlocks 套独立 Map，容量各自判定），
+   * L2 全局共享一套。 */
   class MemoryModel {
-    constructor(cfg) {
+    constructor(cfg, nL1) {
       this.capL2 = cfg.l2Bytes;
       this.capL1 = cfg.l1Bytes;
       this.l2 = new Map(); // id -> {panel, bytes, last, dirty, i2, j2}
-      this.l1 = new Map();
+      this.l1 = Array.from({ length: Math.max(1, nL1 | 0) }, () => new Map());
       this.clock = 0;
       this.stats = {
         l2: { hit: 0, miss: 0, evict: 0, oversize: 0 },
         l1: { hit: 0, miss: 0, evict: 0, oversize: 0 },
       };
     }
-    lookup(level, id) { return (level === 'l2' ? this.l2 : this.l1).has(id); }
-    get(level, id) { return (level === 'l2' ? this.l2 : this.l1).get(id) || null; }
-    touch(level, id) {
-      const b = (level === 'l2' ? this.l2 : this.l1).get(id);
-      if (b) b.last = ++this.clock;
+    mapFor(level, b) { return level === 'l2' ? this.l2 : this.l1[(b || 0) % this.l1.length]; }
+    lookup(level, id, b) { return this.mapFor(level, b).has(id); }
+    get(level, id, b) { return this.mapFor(level, b).get(id) || null; }
+    touch(level, id, b) {
+      const blk = this.mapFor(level, b).get(id);
+      if (blk) blk.last = ++this.clock;
     }
-    insert(level, id, panel, bytes, opts) {
-      const m = level === 'l2' ? this.l2 : this.l1;
+    insert(level, id, panel, bytes, opts, b) {
+      const m = this.mapFor(level, b);
       const cap = level === 'l2' ? this.capL2 : this.capL1;
       const st = this.stats[level];
       const evicted = [];
@@ -183,10 +194,10 @@
         dirty: !!(opts && opts.dirty), i2: opts && opts.i2, j2: opts && opts.j2,
       });
       let total = 0;
-      for (const b of m.values()) total += b.bytes;
+      for (const blk of m.values()) total += blk.bytes;
       while (total > cap) {
         let lru = null, lruId = null;
-        for (const [id2, b] of m) if (!lru || b.last < lru.last) { lru = b; lruId = id2; }
+        for (const [id2, blk] of m) if (!lru || blk.last < lru.last) { lru = blk; lruId = id2; }
         total -= lru.bytes;
         m.delete(lruId);
         st.evict++;
@@ -195,7 +206,7 @@
       }
       return { evicted, resident: true };
     }
-    remove(level, id) { (level === 'l2' ? this.l2 : this.l1).delete(id); }
+    remove(level, id, b) { this.mapFor(level, b).delete(id); }
   }
 
   /* ---------- 事件轨迹生成 ---------- */
@@ -249,7 +260,7 @@
 
     let dramRead = 0, dramWrite = 0, l2Bytes = 0, l1Bytes = 0, regBytes = 0, flops = 0;
 
-    /** 请求 L2 面板（A/B tile）；命中则无 DRAM 流量 */
+    /** 请求 L2 面板（A/B tile）；命中则无 DRAM 流量。L2 全局共享（跨 block）。 */
     const requestL2 = (id, panel, bytes) => {
       if (mm.lookup('l2', id)) {
         mm.stats.l2.hit++;
@@ -270,16 +281,17 @@
     };
 
     /** 请求 L1 微面板（Ar/Br）；L2 缺失时级联到 DRAM。Ar/Br 只读
-     *  恒为干净块，L1 淘汰不产生写回流量。 */
-    const requestL1 = (id, tileId, panel, bytes) => {
-      if (mm.lookup('l1', id)) {
+     *  恒为干净块，L1 淘汰不产生写回流量。L1 按 block 独享
+     *  （b 选择本 block 的 L1，容量独立判定，id 空间互不可见）。 */
+    const requestL1 = (id, tileId, panel, bytes, b) => {
+      if (mm.lookup('l1', id, b)) {
         mm.stats.l1.hit++;
-        mm.touch('l1', id);
+        mm.touch('l1', id, b);
         emit({ type: 'hit', level: 'l1', id }, 0);
         return;
       }
       mm.stats.l1.miss++;
-      const { evicted, resident } = mm.insert('l1', id, panel, bytes);
+      const { evicted, resident } = mm.insert('l1', id, panel, bytes, null, b);
       for (const b of evicted) emit({ type: 'evict', level: 'l1', id: b.id }, 0);
       if (!resident) emit({ type: 'oversize', level: 'l1', id, bytes }, 0);
       if (!mm.lookup('l2', tileId)) {
@@ -297,11 +309,18 @@
       emit({ type: 'xfer', from: 'l2', to: 'l1', id, panel, bytes, miss: true }, xferTime('l2', 'l1', bytes));
     };
 
-    /* ----- 顺序驱动的执行引擎 -----
+    /* ----- 顺序驱动 + 并行 block 的执行引擎 -----
      * 每条语句在其坐标依赖中「最内层」循环的入口发出（该循环每次迭代
      * 必然产生新的坐标组合）；C 写回在 inner(i2,j2) 循环体结束处发出。
      * 合法顺序下乘加循环必为最内层（i2/j2/k2 若嵌进 ir/jr/kr 内部，
-     * 与其边界依赖矛盾）。默认顺序与经典 BLIS 结构逐事件等价。 */
+     * 与其边界依赖矛盾）。默认顺序与经典 BLIS 结构逐事件等价。
+     *
+     * 并行切分（类比 CUDA block）：i2/j2 面板按 biBlocks/bjBlocks 连续
+     * 分组，每组一个 block——独享一套 L1（id 空间独立、容量独立判定），
+     * 共享同一 L2。block 任务实现为 generator，在 k2 迭代边界 yield；
+     * 调度器按 blockIdx 轮转（round-robin）推进——模拟多 block 并发
+     * 共享 L2 的竞争，每轮各 block 前进一个 k2 迭代。ctx 在挂起/恢复
+     * 间以快照保存（各 generator 共享同一 ctx 对象）。 */
     const order = cfg.order;
     const pos = {};
     order.forEach((v, i) => { pos[v] = i; });
@@ -320,20 +339,37 @@
     const MAC_AT = innerOf(['ir', 'jr', 'kr']);
     const STORE_AT = innerOf(['i2', 'j2']);
 
-    const ctx = { i2: 0, j2: 0, k2: 0, ir: 0, jr: 0, kr: 0,
+    const nBlocks = cfg.biBlocks * cfg.bjBlocks;
+    const panelI = Math.ceil(M / mc), panelJ = Math.ceil(N / nc);
+    const perI = Math.ceil(panelI / cfg.biBlocks), perJ = Math.ceil(panelJ / cfg.bjBlocks);
+
+    const ctx = { i2: 0, j2: 0, k2: 0, ir: 0, jr: 0, kr: 0, b: 0,
       mcE: M, ncE: N, kcE: K, mrE: mr, nrE: nr };
 
+    // 各 block 的 i2/j2 面板值列表（连续分组：block b 负责第 b 片）
+    const panelVals = (pTotal, per, b) => {
+      const s = Math.min(b * per, pTotal), e = Math.min((b + 1) * per, pTotal);
+      const a = [];
+      for (let p = s; p < e; p++) a.push(p);
+      return a;
+    };
+    const rangeArr = (s, stop, step) => {
+      const a = [];
+      for (let v = s; v < stop; v += step) a.push(v);
+      return a;
+    };
+
     const RANGE = {
-      i2: () => [0, M, mc],
-      j2: () => [0, N, nc],
-      k2: () => [0, K, kc],
-      ir: () => [ctx.i2, ctx.i2 + ctx.mcE, mr],
-      jr: () => [ctx.j2, ctx.j2 + ctx.ncE, nr],
-      kr: () => [ctx.k2, ctx.k2 + ctx.kcE, 1],
+      i2: () => panelVals(panelI, perI, Math.floor(ctx.b / cfg.bjBlocks)).map((p) => p * mc),
+      j2: () => panelVals(panelJ, perJ, ctx.b % cfg.bjBlocks).map((p) => p * nc),
+      k2: () => rangeArr(0, K, kc),
+      ir: () => rangeArr(ctx.i2, ctx.i2 + ctx.mcE, mr),
+      jr: () => rangeArr(ctx.j2, ctx.j2 + ctx.ncE, nr),
+      kr: () => rangeArr(ctx.k2, ctx.k2 + ctx.kcE, 1),
     };
 
     const stmt = (key) => {
-      const { i2, j2, k2, ir, jr, kr, mcE, ncE, kcE, mrE, nrE } = ctx;
+      const { i2, j2, k2, ir, jr, kr, mcE, ncE, kcE, mrE, nrE, b } = ctx;
       const bi = i2 / mc, bj = j2 / nc, bk = k2 / kc;
       if (key === 'C') {
         // C 块 → L2（写分配/读改写：载入即脏；整个内层循环期间驻留，最终写回）
@@ -350,9 +386,9 @@
       } else if (key === 'B') {
         requestL2('B:' + bk + ':' + bj, 'B', kcE * ncE * ELEM);
       } else if (key === 'Ar') {
-        requestL1('Ar:' + (ir / mr) + ':' + bk, 'A:' + bi + ':' + bk, 'A', mrE * kcE * ELEM);
+        requestL1('Ar:' + (ir / mr) + ':' + bk, 'A:' + bi + ':' + bk, 'A', mrE * kcE * ELEM, b);
       } else if (key === 'Br') {
-        requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM);
+        requestL1('Br:' + bk + ':' + (jr / nr), 'B:' + bk + ':' + bj, 'B', kcE * nrE * ELEM, b);
       } else if (key === 'Reg') {
         // C 微块载入寄存器：物理上是 L2 读（带宽与延迟按 L2 链路计），
         // 跨其内层的 kr 循环驻留；寄存器写回即最终的 C 写路径。
@@ -374,7 +410,7 @@
         flops += f;
         emit({
           type: 'compute', i: ir, j: jr, k: kr, mr: mrE, nr: nrE,
-          flops: f, i2, j2, k2, regBytes: ob,
+          flops: f, i2, j2, k2, regBytes: ob, b,
         }, f / PEAK + ob / BW.reg);
       } else { // Store: C 块写回（若已被脏替换冲刷则跳过，防双计）
         const cId = 'C:' + bi + ':' + bj;
@@ -388,10 +424,9 @@
       }
     };
 
-    function run(depth) {
+    function* runGen(depth) {
       const name = order[depth];
-      const [start, stop, step] = RANGE[name]();
-      for (let v = start; v < stop; v += step) {
+      for (const v of RANGE[name]()) {
         ctx[name] = v;
         if (name === 'i2') ctx.mcE = Math.min(mc, M - v);
         else if (name === 'j2') ctx.ncE = Math.min(nc, N - v);
@@ -400,11 +435,34 @@
         else if (name === 'jr') ctx.nrE = Math.min(nr, ctx.j2 + ctx.ncE - v);
         for (const key of enter[name]) stmt(key);
         if (name === MAC_AT) stmt('MAC');
-        if (depth + 1 < 6) run(depth + 1);
+        if (depth + 1 < 6) yield* runGen(depth + 1);
         if (name === STORE_AT) stmt('Store');
+        if (name === 'k2') yield;   // k2 迭代边界：轮转调度点
       }
     }
-    run(0);
+
+    /* 调度器：每 block 一个 generator（携带本 block 的 ctx 快照），
+     * k2 粒度轮转（round-robin）——每轮各 block 前进一个 k2 迭代，
+     * 模拟多 block 并发共享 L2 的推进与竞争。 */
+    const iters = [];
+    for (let b = 0; b < nBlocks; b++) {
+      for (const k of Object.keys(ctx)) ctx[k] = 0;
+      ctx.mcE = M; ctx.ncE = N; ctx.kcE = K; ctx.mrE = mr; ctx.nrE = nr; ctx.b = b;
+      const it = runGen(0);
+      const r = it.next();
+      if (!r.done) iters.push({ it, b, snap: Object.assign({}, ctx) });
+    }
+    let alive = iters.slice();
+    while (alive.length) {
+      const next = [];
+      for (const task of alive) {
+        Object.assign(ctx, task.snap);   // 恢复本 block 的循环状态
+        const r = task.it.next();
+        task.snap = Object.assign({}, ctx);
+        if (!r.done) next.push(task);
+      }
+      alive = next;
+    }
 
     const computeTime = flops / PEAK;
 

@@ -200,7 +200,7 @@
         ctx.fillRect(lx, ly - 7, 7, 7);
         ctx.fillStyle = '#5b6675';
         ctx.fillText(t, lx + 10, ly);
-        lx += 12 + ctx.measureText(t).width + 14;
+        lx += 10 + t.length * 5 + 14;   // 8.5px 字体约 5px/字符 + 间距
       }
     }
   }
