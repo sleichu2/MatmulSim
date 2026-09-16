@@ -45,6 +45,9 @@
       this.regC = null;       // 最近一次寄存器 C 微块载入
       this.curByBlock = [];   // 各 block 的 compute 位置（并行可视化：同时绘制）
       this.regCByBlock = [];  // 各 block 的寄存器 C 微块
+      this.nBlocks = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
+      this.focusB = 0;        // 焦点 block（锁步并行下按时间轮换，供放大镜/HUD）
+      this.focusT = 0;        // 焦点轮换计时
       this.memL2 = new Map(); // 驻留镜像: id -> {panel, bytes}
       this.memL1 = new Map();
       this.dramR = 0; this.dramW = 0; this.l2B = 0; this.regB = 0; this.flops = 0;
@@ -68,6 +71,11 @@
       L.bytes += bytes; L.ns += ns; L.n++;
       if (dirty) L.dirty++;
     }
+
+    /* 锁步并行下所有 block 每拍都在算，焦点不能跟着最近事件跳（会频闪），
+     * 而是按墙钟每 600ms 轮换到下一个 block——放大镜/HUD 轮流特写各块。 */
+    get focus() { return this.curByBlock[this.focusB] || this.cur; }
+    get focusReg() { return this.regCByBlock[this.focusB] || this.regC; }
 
     dwellOf(ev) {
       switch (ev.type) {
@@ -168,6 +176,13 @@
      * （如 0.25× 时 dwell 64ms > 单帧 16.7ms）回放冻结的问题。 */
     advance(dtMs, speed, onEvent) {
       if (this.isEnd) return 0;
+      if (this.nBlocks > 1) {
+        this.focusT += dtMs;
+        if (this.focusT >= 600) {
+          this.focusT = 0;
+          this.focusB = (this.focusB + 1) % this.nBlocks;
+        }
+      }
       this.credit = Math.min(this.credit + Math.min(dtMs, 34), 250);
       let n = 0;
       const t0 = (global.performance && performance.now) ? performance.now() : Date.now();

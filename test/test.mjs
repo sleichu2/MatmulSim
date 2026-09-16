@@ -382,10 +382,10 @@ console.log('=== 13. 并行切分: block 数值正确 / L1 独享 / 共享 L2 / 
 
   // 13e. 计算单元池：单元数可单独设置；单元 < 块数时计算在单元上串行排队
   {
-    // 计算主导配置（大面板 + 大微内核摊薄访存与延迟），单元数差异才能在
-    // 总时间上显现——访存主导配置会被共享带宽项掩盖
-    const base = { M: 128, N: 64, K: 64, mc: 64, nc: 64, kc: 64, mr: 8, nr: 8,
-      l2KB: 256, l1KB: 64 };
+    // 计算主导配置（大方阵 + 大面板，算术强度远超带宽脊点），单元数差异
+    // 才能在总时间上显现——访存主导配置会被共享带宽项掩盖
+    const base = { M: 256, N: 256, K: 512, mc: 128, nc: 128, kc: 128, mr: 16, nr: 16,
+      l2KB: 512, l1KB: 256 };
     const run = (bl) => MSim.buildTrace(MSim.normalize({ ...base, ...bl }).cfg).stats;
     // 钳制：单元数 > 块数 → 钳到块数
     const c1 = MSim.normalize({ ...base, biBlocks: 2, nCores: 8 });
@@ -397,18 +397,41 @@ console.log('=== 13. 并行切分: block 数值正确 / L1 独享 / 共享 L2 / 
     check('自动计算单元 == 显式块数（totalTime 一致）',
       auto.totalTime === expl.totalTime && auto.nCores === 2 && expl.nCores === 2,
       auto.totalTime + ' vs ' + expl.totalTime);
-    // 单元受限：1 单元跑 2 块 → 计算排队，总时间显著变长
+    // 单元受限：1 单元跑 2 块 → 计算排队，总时间近乎翻倍
     const one = run({ biBlocks: 2, nCores: 1 });
-    check('1 单元 2 块慢于 2 单元（计算串行排队）', one.totalTime > expl.totalTime,
+    check('1 单元 2 块慢于 2 单元（计算串行排队）', one.totalTime > expl.totalTime * 1.5,
       one.totalTime.toFixed(0) + ' vs ' + expl.totalTime.toFixed(0));
     check('1 单元加速比 < 2 单元加速比', one.speedup < expl.speedup,
       one.speedup.toFixed(2) + ' vs ' + expl.speedup.toFixed(2));
     // 单元数不影响计算量
-    check('受限单元 FLOPs 不变', one.flops === expl.flops && expl.flops === 2 * 128 * 64 * 64,
+    check('受限单元 FLOPs 不变', one.flops === expl.flops && expl.flops === 2 * 256 * 256 * 512,
       one.flops + ' vs ' + expl.flops);
   }
 
-  // 13f. K 轴切分（split-K）暂不支持：跨 block 归约依赖，列入 TODO
+  // 13f. 锁步并行：微内核粒度轮转，compute 事件按 block 逐拍交错，
+  //      同一拍内各 block 的 k 相同（动画上可见同步并行推进）
+  {
+    const base2 = { M: 32, N: 32, K: 32, mc: 16, nc: 16, kc: 16, mr: 4, nr: 4, l2KB: 10, l1KB: 3 };
+    const res = MSim.buildTrace(MSim.normalize({ ...base2, biBlocks: 2, bjBlocks: 2 }).cfg);
+    const cs = res.events.filter((e) => e.type === 'compute');
+    check('compute 事件按 block 锁步轮转 (0,1,2,3,0,…)',
+      cs.length >= 8 && cs[0].b === 0 && cs[1].b === 1 && cs[2].b === 2 && cs[3].b === 3 && cs[4].b === 0,
+      cs.slice(0, 5).map((e) => e.b).join(','));
+    check('锁步：同一拍各 block 的 k 相同，下一拍 +1',
+      cs[0].k === cs[1].k && cs[1].k === cs[2].k && cs[2].k === cs[3].k
+        && cs[4].k === cs[0].k + 1 && cs[5].k === cs[1].k + 1,
+      cs.slice(0, 6).map((e) => 'B' + e.b + ':k' + e.k).join(' '));
+    // 单 block 不受锁步影响：compute 事件数恒为 MNK/(mr·nr)，全部属于 B0
+    const one = MSim.buildTrace(MSim.normalize(base2).cfg);
+    const oneCs = one.events.filter((e) => e.type === 'compute');
+    check('单 block 无锁步交错（compute 数恒定）',
+      oneCs.length === 32 ** 3 / 16 && oneCs.every((e) => !e.b),
+      oneCs.length);
+    check('锁步不改变计算量', res.stats.flops === one.stats.flops && one.stats.flops === 2 * 32 ** 3,
+      res.stats.flops);
+  }
+
+  // 13g. K 轴切分（split-K）暂不支持：跨 block 归约依赖，列入 TODO
   //      （normalize 不处理 kBlocks，传入无效果——此处仅文档化约束）
 }
 

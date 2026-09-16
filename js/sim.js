@@ -220,7 +220,9 @@
   /* ---------- 事件轨迹生成 ---------- */
   function buildTrace(cfg) {
     const { M, N, K, mc, nc, kc, mr, nr } = cfg;
-    const mm = new MemoryModel(cfg);
+    // L1 按 block 独享：必须传入块数，否则所有 block 共享一套 L1 Map，
+    // 锁步并行时互相挤出 Ar/Br（此 bug 曾被 k2 粒度轮转掩盖）
+    const mm = new MemoryModel(cfg, Math.max(1, (cfg.biBlocks || 1) * (cfg.bjBlocks || 1)));
     const events = [];
     let t = 0;
     // emit(ev, durNs): durNs 是该事件的模拟时长。记账事件(hit/evict/oversize)
@@ -343,10 +345,11 @@
      *
      * 并行切分（类比 CUDA block）：i2/j2 面板按 biBlocks/bjBlocks 连续
      * 分组，每组一个 block——独享一套 L1（id 空间独立、容量独立判定），
-     * 共享同一 L2。block 任务实现为 generator，在 k2 迭代边界 yield；
-     * 调度器按 blockIdx 轮转（round-robin）推进——模拟多 block 并发
-     * 共享 L2 的竞争，每轮各 block 前进一个 k2 迭代。ctx 在挂起/恢复
-     * 间以快照保存（各 generator 共享同一 ctx 对象）。 */
+     * 共享同一 L2。block 任务实现为 generator；多 block 时在**每个微内核
+     * （MAC）之后** yield，调度器按 blockIdx 轮转（round-robin）——
+     * 各 block 的 kr 逐拍锁步推进（同一拍内各 block 的 k 相同），
+     * 动画上可见多 block 真正同步并行计算；单 block 不额外 yield。
+     * ctx 在挂起/恢复间以快照保存（各 generator 共享同一 ctx 对象）。 */
     const order = cfg.order;
     const pos = {};
     order.forEach((v, i) => { pos[v] = i; });
@@ -463,16 +466,21 @@
         else if (name === 'ir') ctx.mrE = Math.min(mr, ctx.i2 + ctx.mcE - v);
         else if (name === 'jr') ctx.nrE = Math.min(nr, ctx.j2 + ctx.ncE - v);
         for (const key of enter[name]) stmt(key);
-        if (name === MAC_AT) stmt('MAC');
+        if (name === MAC_AT) {
+          stmt('MAC');
+          // 微内核粒度锁步：多 block 时每个 MAC 后让出，各 block 的 kr
+          // 同拍推进——回放动画上可见所有 block 同步并行计算
+          if (nBlocks > 1) yield;
+        }
         if (depth + 1 < 6) yield* runGen(depth + 1);
         if (name === STORE_AT) stmt('Store');
-        if (name === 'k2') yield;   // k2 迭代边界：轮转调度点
+        if (name === 'k2') yield;   // k2 迭代边界：轮转调度点（单 block 时唯一让出点）
       }
     }
 
     /* 调度器：每 block 一个 generator（携带本 block 的 ctx 快照），
-     * k2 粒度轮转（round-robin）——每轮各 block 前进一个 k2 迭代，
-     * 模拟多 block 并发共享 L2 的推进与竞争。 */
+     * 多 block 时按微内核粒度轮转（round-robin）——每拍各 block 各前进一步
+     * 微内核（kr 锁步），模拟多 block 真正同步并行；单 block 一次跑完。 */
     const iters = [];
     for (let b = 0; b < nBlocks; b++) {
       for (const k of Object.keys(ctx)) ctx[k] = 0;

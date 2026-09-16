@@ -156,9 +156,15 @@
   /* ---------- HUD ---------- */
   function describeEvent(ev) {
     switch (ev.type) {
-      case 'compute':
-        return '计算 C[' + ev.i + ':' + (ev.i + ev.mr) + ', ' + ev.j + ':' + (ev.j + ev.nr)
+      case 'compute': {
+        let s = '计算 C[' + ev.i + ':' + (ev.i + ev.mr) + ', ' + ev.j + ':' + (ev.j + ev.nr)
           + '] += A[:,k=' + ev.k + '] ⊗ B[k=' + ev.k + ',:]  (' + ev.mr + '×' + ev.nr + ' 宏内核)';
+        if (state.cfg && ((state.cfg.biBlocks || 1) * (state.cfg.bjBlocks || 1)) > 1) {
+          s += ' · B' + ev.b;
+          if (state.cfg.nCores > 0) s += '@计算单元' + ((ev.core || 0) + 1);
+        }
+        return s;
+      }
       case 'xfer': {
         const name = (l) => l === 'dram' ? 'DRAM' : l === 'l2' ? 'L2' : 'L1';
         let s = name(ev.from) + ' → ' + name(ev.to) + '  ' + ev.id + '  ' + U.fmtBytes(ev.bytes);
@@ -191,8 +197,9 @@
     hudLastMs = performance.now();
     const pl = state.player;
     let s = '';
-    if (pl.cur) s = 'i2=' + pl.cur.i2 + ' j2=' + pl.cur.j2 + ' k2=' + pl.cur.k2
-      + ' · ir=' + pl.cur.i + ' jr=' + pl.cur.j + ' · k=' + pl.cur.k + '   |   ';
+    const f = pl.focus || pl.cur;   // 锁步并行下焦点按时间轮换，不随最近事件频闪
+    if (f) s = 'i2=' + f.i2 + ' j2=' + f.j2 + ' k2=' + f.k2
+      + ' · ir=' + f.i + ' jr=' + f.j + ' · k=' + f.k + '   |   ';
     if (pl.lastEv) s += describeEvent(pl.lastEv);
     else s += '待开始';
     ui.setHud(s);

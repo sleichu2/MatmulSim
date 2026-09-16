@@ -247,20 +247,21 @@
       ctx.drawImage(this.layers.B.c, L.bX, L.bY, L.bW, L.bH);
       ctx.drawImage(this.layers.C.c, L.cX, L.cY, L.cW, L.cH);
       ctx.drawImage(this.layers.G.c, 0, 0, this.w, this.h);
-      // 3) 动态覆盖。多 block 并行时分层降噪：
-      //    L2 级（领地 + C 面板呼吸发光 + A/B 读取窗细框）所有 block 常显 → 看「齐动」；
-      //    L1 级细节（微面板 / kr 亮线 / 数据流箭头）只画焦点 block（最近一次 compute），
-      //    否则几组微面板与箭头互相叠画必然混乱。
+      // 3) 动态覆盖。多 block 并行（锁步）时分层：
+      //    每个 block 的 L2 级 + 微内核级活跃状态（C 面板呼吸发光 / A、B
+      //    读取窗 / kr 亮线 / C 微块）全部同时绘制 → 肉眼可见多块同步并行；
+      //    数据流箭头与放大镜只跟焦点 block（按时间轮换特写），避免混乱。
       const nBlocks = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
       if (nBlocks > 1) {
         this.drawBlockRegions(ctx);
-        const focusB = pl.cur ? (pl.cur.b || 0) : -1;
+        const focus = pl.focus || pl.cur;
+        const focusB = focus ? (focus.b || 0) : -1;
         for (let b = 0; b < nBlocks; b++) {
           if (b === focusB) continue;
           const cur = pl.curByBlock[b];
           if (cur) this.drawBlockPanel(ctx, cur, now);
         }
-        if (pl.cur) this.drawHighlights(ctx, pl.cur, now, false);
+        if (focus) this.drawHighlights(ctx, focus, now, false);
       } else if (pl.cur) {
         this.drawHighlights(ctx, pl.cur, now, true);
       }
@@ -276,12 +277,14 @@
       }
     }
 
-    /* ---------- 并行模式：非焦点 block 的 L2 级活跃指示 ----------
-     * C 面板呼吸发光（相位错开，多块同屏可见各自推进）+
-     * 共享 A/B 上各自的读取窗细框。A/B 框重叠 = 多 block 读同一面板（共享语义）。 */
+    /* ---------- 并行模式：非焦点 block 的活跃指示 ----------
+     * L2 级：C 面板呼吸发光（相位错开，多块同屏可见各自推进）+
+     * 共享 A/B 上各自的读取窗细框（重叠 = 多 block 读同一面板）。
+     * 微内核级：kr 亮线（A 列/B 行）+ C 微块描边，block 色同拍推进
+     * ——锁步并行的核心视觉：每一拍所有 block 的微内核一起前进。 */
     drawBlockPanel(ctx, cur, now) {
       const { M, N, K, mc, nc, kc } = this.cfg;
-      const { i2, j2, k2 } = cur;
+      const { i2, j2, k2, i, j, k, mr, nr } = cur;
       const mcE = Math.min(mc, M - i2), ncE = Math.min(nc, N - j2), kcE = Math.min(kc, K - k2);
       const L = this.L, p = L.p;
       const c = U.BLOCK_COLORS[(cur.b || 0) % U.BLOCK_COLORS.length];
@@ -293,6 +296,15 @@
       ctx.lineWidth = 1;
       ctx.strokeRect(L.aX + k2 * p + 0.5, L.aY + i2 * p + 0.5, kcE * p - 1, mcE * p - 1);
       ctx.strokeRect(L.bX + j2 * p + 0.5, L.bY + k2 * p + 0.5, ncE * p - 1, kcE * p - 1);
+      // 微内核级：当前 kr（k 列/行）+ 正在累加的 C 微块
+      ctx.globalAlpha = U.clamp(0.30 + 0.22 * Math.sin(now / 300 + (cur.b || 0) * 2.1), 0.1, 0.6);
+      ctx.fillStyle = c;
+      ctx.fillRect(L.aX + k * p, L.aY, Math.max(p, 1), L.aH);
+      ctx.fillRect(L.bX, L.bY + k * p, L.bW, Math.max(p, 1));
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = c + 'b0';
+      ctx.lineWidth = 1.25;
+      ctx.strokeRect(L.cX + j * p + 0.5, L.cY + i * p + 0.5, nr * p - 1, mr * p - 1);
     }
 
     /* ---------- block 领地区域（一次绘制） ---------- */
@@ -355,11 +367,17 @@
       ctx.strokeRect(L.bX + j * p + 0.5, L.bY + k2 * p + 0.5, nr * p - 1, kcE * p - 1);
       ctx.strokeRect(L.cX + j * p + 0.5, L.cY + i * p + 0.5, nr * p - 1, mr * p - 1);
 
-      // 当前 kr 亮线（A 列 / B 行）
+      // 当前 kr 亮线（A 列 / B 行）——多 block 时用 block 色与其活跃状态同调
       const pulse = 0.22 + 0.12 * Math.sin(now / 160);
-      ctx.fillStyle = 'rgba(255,205,90,' + pulse.toFixed(3) + ')';
+      if (bColor) {
+        ctx.globalAlpha = U.clamp(0.4 + 0.25 * Math.sin(now / 160), 0.15, 0.65);
+        ctx.fillStyle = bColor;
+      } else {
+        ctx.fillStyle = 'rgba(255,205,90,' + pulse.toFixed(3) + ')';
+      }
       ctx.fillRect(L.aX + k * p, L.aY, p, L.aH);
       ctx.fillRect(L.bX, L.bY + k * p, L.bW, p);
+      ctx.globalAlpha = 1;
 
       // 数据流箭头 A→C、B→C（多 block 时用 block 色）
       const arrowColor = bColor ? bColor + '70' : 'rgba(255,196,90,0.45)';
@@ -391,8 +409,9 @@
 
     /* ---------- 微内核放大动画 ---------- */
     insetSize() {
-      const mr = this.player.cur ? this.player.cur.mr : this.cfg.mr;
-      const nr = this.player.cur ? this.player.cur.nr : this.cfg.nr;
+      const cur = this.player.focus || this.player.cur;
+      const mr = cur ? cur.mr : this.cfg.mr;
+      const nr = cur ? cur.nr : this.cfg.nr;
       const cs = Math.max(10, Math.min(26, Math.floor(120 / Math.max(mr, nr, 1))));
       const pad = 8, titleH = 15, footH = 14;
       return {
@@ -427,7 +446,7 @@
       ctx.textBaseline = 'alphabetic';
       ctx.fillText('微内核(寄存器级)  C[i,j] += A[:,k] ⊗ B[k,:]', x + S.pad, y + 11);
 
-      const cur = pl.cur;
+      const cur = pl.focus || pl.cur;
       if (!cur) {
         ctx.fillStyle = '#5b6675';
         ctx.font = '10px -apple-system, "PingFang SC", sans-serif';
@@ -504,7 +523,9 @@
       ctx.font = '9px ui-monospace, monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'alphabetic';
-      ctx.fillText('k=' + k + '  (' + (k - cur.k2 + 1) + '/' + kcE + ')', x + S.w - S.pad, y + S.h - 4);
+      const nBlk = ((this.cfg.biBlocks || 1) * (this.cfg.bjBlocks || 1)) || 1;
+      ctx.fillText((nBlk > 1 ? 'B' + (cur.b || 0) + ' · ' : '')
+        + 'k=' + k + '  (' + (k - cur.k2 + 1) + '/' + kcE + ')', x + S.w - S.pad, y + S.h - 4);
       ctx.textAlign = 'left';
       ctx.fillText('ir=' + i + ' jr=' + j, x + S.pad, y + S.h - 4);
     }

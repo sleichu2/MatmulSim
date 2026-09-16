@@ -235,8 +235,8 @@
     }
 
     drawRegs(ctx, player, contentX, ry, contentW, rowH) {
-      const cur = player.cur;
-      const regC = player.regC;
+      const cur = player.focus || player.cur;
+      const regC = player.focusReg || player.regC;
       let x = contentX;
       const w3 = (contentW - 12) / 3;
       chip(ctx, x, ry + 6, w3, 16, regC ? 'C 微块 ' + regC.rows + '×' + regC.cols : 'C 微块 —', PANEL_COLORS.C, !!regC);
